@@ -6,12 +6,14 @@ import (
 )
 
 var (
-	ErrPacketShort = fmt.Errorf("packet length too short")
+	ErrPacketShort = fmt.Errorf("packet malformed: length too short")
+	ErrPacketLong  = fmt.Errorf("packet malformed: length too long")
 )
 
 type Packet interface {
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
+	Marshal() (b []byte, err error)
 }
 
 type version uint8
@@ -22,9 +24,9 @@ const (
 	cmdConnect     uint8 = 0x10
 	cmdConnAck     uint8 = 0x20
 	cmdPublish     uint8 = 0x30
-	cmdPuback      uint8 = 0x40
-	cmdPubrec      uint8 = 0x50
-	cmdPubrel      uint8 = 0x60
+	cmdPubAck      uint8 = 0x40
+	cmdPubRec      uint8 = 0x50
+	cmdPubRel      uint8 = 0x60
 	cmdPubComp     uint8 = 0x70
 	cmdSubscribe   uint8 = 0x80
 	cmdSuback      uint8 = 0x90
@@ -58,4 +60,8 @@ const (
 	// Flags
 	ConnAckFlagMaskv311       uint8 = 0x01
 	ConnAckFlagSessionPresent uint8 = 0x01
+
+	// PUBLISH
+	PublishFlagDuplicate uint8 = 0x08
+	PublishFlagRetain    uint8 = 0x01
 )

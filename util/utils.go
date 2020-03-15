@@ -36,24 +36,24 @@ func ReadVarint(r io.Reader) (v uint32, n int, err error) {
 	return 0, 4, fmt.Errorf("Varint too long: > 4 bytes")
 }
 
-//func EncodeUTF8(b []byte, str string) (n int, err error) {
-//	defer func() {
-//		if r := recover(); r != nil {
-//			var ok bool
-//			err, ok = r.(error)
-//			if !ok {
-//				panic(r)
-//			}
-//		}
-//	}()
-//	var l int
-//	if l = len(str); l > 0xFFFFFFFF {
-//		return 0, fmt.Errorf("UTF-8 string too long")
-//	}
-//	binary.BigEndian.PutUint16(b, uint16(l))
-//	copy(b[2:], str)
-//	return l + 2, nil
-//}
+func EncodeUTF8(b []byte, str string) (n int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			var ok bool
+			err, ok = r.(error)
+			if !ok {
+				panic(r)
+			}
+		}
+	}()
+	var l int
+	if l = len(str); l > 0xFFFFFFFF {
+		return 0, fmt.Errorf("UTF-8 string too long")
+	}
+	binary.BigEndian.PutUint16(b, uint16(l))
+	copy(b[2:], str)
+	return l + 2, nil
+}
 
 // TODO: Actually extend from ascii to UTF-8
 func WriteUTF8(w io.Writer, str string) (n int, err error) {
