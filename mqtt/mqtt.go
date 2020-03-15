@@ -29,11 +29,11 @@ const (
 	cmdPubRel      uint8 = 0x60
 	cmdPubComp     uint8 = 0x70
 	cmdSubscribe   uint8 = 0x80
-	cmdSuback      uint8 = 0x90
+	cmdSubAck      uint8 = 0x90
 	cmdUnsubscribe uint8 = 0xA0
-	cmdUnsuback    uint8 = 0xB0
-	cmdPingreq     uint8 = 0xC0
-	cmdPingresp    uint8 = 0xD0
+	cmdUnsubAck    uint8 = 0xB0
+	cmdPingReq     uint8 = 0xC0
+	cmdPingResp    uint8 = 0xD0
 	cmdDisconnect  uint8 = 0xE0
 	cmdAuth        uint8 = 0xF0
 

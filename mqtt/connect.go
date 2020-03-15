@@ -55,15 +55,15 @@ func NewDisconnectPacket(version version) *Disconnect {
 	}
 }
 
-// WriteTo marshals and writes the connect request to the stream w.
-func (c *Connect) WriteTo(w io.Writer) (n int64, err error) {
+func (c *Connect) Marshal() (b []byte, err error) {
+	var i int
 	var flags uint8
 	var buf [4]byte
 	// Initialize length to fixed variable header length:
 	//     "MQTT" + version + Flags + KeepAlive
 	var length int = 10
 	if c.WillQoS > 2 {
-		return 0, fmt.Errorf("illegal QoS value (highest: 2)")
+		return nil, fmt.Errorf("illegal QoS value (highest: 2)")
 	}
 	// Compute Flags
 	if c.CleanSession {
@@ -88,7 +88,7 @@ func (c *Connect) WriteTo(w io.Writer) (n int64, err error) {
 	if len(c.ClientID) == 0 {
 		uuid, err := uuid.NewRandom()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		c.ClientID = uuid.String()
 	}
@@ -97,82 +97,68 @@ func (c *Connect) WriteTo(w io.Writer) (n int64, err error) {
 
 	// Encode message to stream
 	// Fixed header
-	N, err := w.Write(append([]byte{cmdConnect}, buf[:l]...))
-	n += int64(N)
-	if err != nil {
-		return n, err
-	} else if n < int64(l+1) {
-		return n, io.ErrShortWrite
-	}
+	b = make([]byte, length+1+l)
+	b[0] = cmdConnect
+	i++
+
 	// Variable header
-	N, err = w.Write([]byte{0, 4, 'M', 'Q', 'T', 'T',
+	i += copy(b[i:], buf[:l])
+	// Variable header
+	i += copy(b[i:], []byte{0, 4, 'M', 'Q', 'T', 'T',
 		uint8(c.Version), flags})
-	n += int64(N)
 	if err != nil {
-		return n, err
-	} else if N < 8 {
-		return n, io.ErrShortWrite
+		return nil, err
 	}
-	binary.BigEndian.PutUint16(buf[:2], c.KeepAlive)
+	binary.BigEndian.PutUint16(b[i:], c.KeepAlive)
+	i += 2
 
 	// Payload
-	binary.BigEndian.PutUint16(buf[2:], uint16(len(c.ClientID)))
-	N, err = w.Write(buf[:])
-	n += int64(N)
+	n, err := util.EncodeUTF8(b[i:], c.ClientID)
 	if err != nil {
-		return n, err
-	} else if N < 4 {
-		return n, io.ErrShortWrite
+		return nil, err
 	}
-
-	N, err = w.Write([]byte(c.ClientID))
-	n += int64(N)
-	if err != nil {
-		return n, err
-	} else if n < int64(len(c.ClientID)) {
-		return n, io.ErrShortWrite
-	}
+	i += n
 
 	if c.WillTopic != "" {
-		N, err = util.WriteUTF8(w, c.WillTopic)
-		n += int64(N)
+		n, err = util.EncodeUTF8(b[i:], c.WillTopic)
 		if err != nil {
-			return n, err
+			return nil, err
 		}
+		i += n
 		l := len(c.WillMessage) + 2
 		if l > 0xFFFFFFFF {
-			return n, fmt.Errorf("connect: WillMessage too long")
+			return nil, fmt.Errorf("connect: WillMessage too long")
 		}
-		binary.BigEndian.PutUint16(buf[:2], uint16(l))
-		N, err = w.Write(buf[:2])
-		n += int64(N)
-		if err != nil {
-			return n, err
-		}
-		N, err = w.Write(c.WillMessage)
-		n += int64(N)
-		if err != nil {
-			return n, err
-		} else if N < len(c.WillMessage) {
-			return n, io.ErrShortWrite
-		}
+		binary.BigEndian.PutUint16(b[i:], uint16(l))
+		i += 2
+		i += copy(b[i:], c.WillMessage)
 	}
 
 	if c.Username != "" {
-		N, err = util.WriteUTF8(w, c.Username)
-		n += int64(N)
+		n, err = util.EncodeUTF8(b[i:], c.Username)
 		if err != nil {
-			return n, err
+			return nil, err
 		}
+		i += n
 		if c.Password != "" {
-			N, err = util.WriteUTF8(w, c.Password)
-			n += int64(N)
+			n, err = util.EncodeUTF8(b[i:], c.Password)
 			if err != nil {
-				return n, err
+				return nil, err
 			}
 		}
 	}
-	return n, nil
+	return b, nil
+}
+
+// WriteTo marshals and writes the connect request to the stream w.
+func (c *Connect) WriteTo(w io.Writer) (n int64, err error) {
+	b, err := c.Marshal()
+	if err != nil {
+		return 0, err
+	}
+	N, err := w.Write(b)
+	n = int64(N)
+	return n, err
 }
 
 // ReadFrom reads and unmarshals a connect request from the stream.
@@ -279,15 +265,23 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, nil
 }
 
+func (c *ConnAck) Marshal() (b []byte, err error) {
+	b = []byte{cmdConnAck, 2, 0, c.ReturnCode}
+	if c.SessionPresent {
+		b[2] |= ConnAckFlagSessionPresent
+	}
+	return b, nil
+}
+
 // WriteTo writes the marshaled ConnAck packet to the stream w.
 func (c *ConnAck) WriteTo(w io.Writer) (n int64, err error) {
-	var flags uint8
-	if c.SessionPresent {
-		flags |= ConnAckFlagSessionPresent
+	b, err := c.Marshal()
+	if err != nil {
+		return 0, err
 	}
-
-	N, err := w.Write([]byte{cmdConnAck, 2, flags, c.ReturnCode})
-	return int64(N), err
+	N, err := w.Write(b)
+	n = int64(N)
+	return n, err
 }
 
 // ReadFrom reads and unmarshals the ConnAck request from stream.
@@ -306,10 +300,19 @@ func (c *ConnAck) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, nil
 }
 
+func (d *Disconnect) Marshal() (b []byte, err error) {
+	return []byte{cmdDisconnect, 0}, nil
+}
+
 // WriteTo writes the marshaled Disconnect request to stream.
 func (d *Disconnect) WriteTo(w io.Writer) (n int64, err error) {
-	N, err := w.Write([]byte{cmdDisconnect, 0})
-	return int64(N), err
+	b, err := d.Marshal()
+	if err != nil {
+		return 0, err
+	}
+	N, err := w.Write(b)
+	n = int64(N)
+	return n, err
 }
 
 // ReadFrom reads the final length byte from stream, verifying that the packet
