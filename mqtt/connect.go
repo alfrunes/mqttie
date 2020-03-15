@@ -1,4 +1,4 @@
-package pkg
+package mqtt
 
 import (
 	"bytes"
