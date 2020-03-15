@@ -65,3 +65,177 @@ const (
 	PublishFlagDuplicate uint8 = 0x08
 	PublishFlagRetain    uint8 = 0x01
 )
+
+func Send(w io.Writer, p Packet) (n int, err error) {
+	N, err := p.WriteTo(w)
+	n = int(N)
+	return n, err
+}
+
+func Recv(r io.Reader) (p Packet, err error) {
+	var buf [1]byte
+	_, err = r.Read(buf[:])
+	if err != nil {
+		return nil, err
+	}
+	cmdByte := buf[0]
+	cmd := uint8(buf[0] & 0xF0)
+
+	switch cmd {
+	// TODO: Support for different MQTT versions
+	case cmdConnect:
+		pkg := &Connect{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdConnAck:
+		pkg := &ConnAck{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPublish:
+		pkg := &Publish{
+			Version: MQTTv311,
+		}
+		if cmdByte&PublishFlagDuplicate > 0 {
+			pkg.Duplicate = true
+		}
+		if cmdByte&PublishFlagRetain > 0 {
+			pkg.Retain = true
+		}
+
+		_, err = pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPubAck:
+		pkg := &PubAck{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPubRec:
+		pkg := &PubRec{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPubRel:
+		pkg := &PubRel{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPubComp:
+		pkg := &PubComp{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdSubscribe:
+		pkg := &Subscribe{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdSubAck:
+		pkg := &SubAck{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdUnsubscribe:
+		pkg := &Unsubscribe{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdUnsubAck:
+		pkg := &UnsubAck{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPingReq:
+		pkg := &PingReq{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdPingResp:
+		pkg := &PingResp{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdDisconnect:
+		pkg := &Disconnect{
+			Version: MQTTv311,
+		}
+		_, err := pkg.ReadFrom(r)
+		if err != nil {
+			return nil, err
+		}
+		p = pkg
+
+	case cmdAuth:
+		// TODO: MQTT v5
+		fallthrough
+	default:
+		return nil, fmt.Errorf("invalid command byte: 0x%02X", cmd)
+	}
+
+	return p, err
+}
