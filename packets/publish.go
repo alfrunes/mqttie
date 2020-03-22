@@ -1,14 +1,27 @@
-package mqtt
+package packets
 
 import (
 	"encoding/binary"
 	"io"
 
+	"github.com/alfrunes/mqttie/mqtt"
 	"github.com/alfrunes/mqttie/util"
 )
 
+const (
+	cmdPublish uint8 = 0x30
+	cmdPubAck  uint8 = 0x40
+	cmdPubRec  uint8 = 0x50
+	cmdPubRel  uint8 = 0x60
+	cmdPubComp uint8 = 0x70
+
+	// Flags
+	PublishFlagDuplicate uint8 = 0x08
+	PublishFlagRetain    uint8 = 0x01
+)
+
 func NewPublishPacket(
-	version version,
+	version mqtt.Version,
 	topicName string,
 	packetID uint16,
 ) *Publish {
@@ -20,7 +33,7 @@ func NewPublishPacket(
 	}
 }
 
-func NewPubAckPacket(version version, packetID uint16) *PubAck {
+func NewPubAckPacket(version mqtt.Version, packetID uint16) *PubAck {
 	return &PubAck{
 		Version: version,
 
@@ -28,7 +41,7 @@ func NewPubAckPacket(version version, packetID uint16) *PubAck {
 	}
 }
 
-func NewPubRecPacket(version version, packetID uint16) *PubRec {
+func NewPubRecPacket(version mqtt.Version, packetID uint16) *PubRec {
 	return &PubRec{
 		Version: version,
 
@@ -36,7 +49,7 @@ func NewPubRecPacket(version version, packetID uint16) *PubRec {
 	}
 }
 
-func NewPubRelPacket(version version, packetID uint16) *PubRel {
+func NewPubRelPacket(version mqtt.Version, packetID uint16) *PubRel {
 	return &PubRel{
 		Version: version,
 
@@ -44,7 +57,7 @@ func NewPubRelPacket(version version, packetID uint16) *PubRel {
 	}
 }
 
-func NewPubCompPacket(version version, packetID uint16) *PubComp {
+func NewPubCompPacket(version mqtt.Version, packetID uint16) *PubComp {
 	return &PubComp{
 		Version: version,
 
@@ -53,11 +66,11 @@ func NewPubCompPacket(version version, packetID uint16) *PubComp {
 }
 
 type Publish struct {
-	Version version
+	Version mqtt.Version
 
 	// Flags
 	Duplicate bool
-	QoSLevel  uint8
+	QoSLevel  mqtt.QoS
 	Retain    bool
 
 	// Variable header
@@ -68,34 +81,34 @@ type Publish struct {
 }
 
 type PubAck struct {
-	Version version
+	Version mqtt.Version
 
 	// Variable header
 	PacketIdentifier uint16
 }
 
 type PubRec struct {
-	Version version
+	Version mqtt.Version
 
 	// Variable header
 	PacketIdentifier uint16
 }
 
 type PubRel struct {
-	Version version
+	Version mqtt.Version
 
 	// Variable header
 	PacketIdentifier uint16
 }
 
 type PubComp struct {
-	Version version
+	Version mqtt.Version
 
 	// Variable header
 	PacketIdentifier uint16
 }
 
-func (p *Publish) Marshal() (b []byte, err error) {
+func (p *Publish) MarshalBinary() (b []byte, err error) {
 	var buf [4]byte
 	var i int
 	fixedHeader := cmdPublish
@@ -103,7 +116,7 @@ func (p *Publish) Marshal() (b []byte, err error) {
 		fixedHeader |= PublishFlagDuplicate
 	}
 	if p.QoSLevel > 0 {
-		fixedHeader |= (p.QoSLevel << 1)
+		fixedHeader |= (uint8(p.QoSLevel) << 1)
 	}
 	if p.Retain {
 		fixedHeader |= PublishFlagRetain
@@ -139,7 +152,7 @@ func (p *Publish) Marshal() (b []byte, err error) {
 }
 
 func (p *Publish) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.Marshal()
+	b, err := p.MarshalBinary()
 	n = int64(len(b))
 	return n, err
 }
@@ -158,7 +171,7 @@ func (p *Publish) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if length <= 0 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 	N, err = r.Read(buf[:])
 	length -= N
@@ -167,7 +180,7 @@ func (p *Publish) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	} else if length < 0 {
 		// NOTE: payload can be zero length
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 	p.PacketIdentifier = binary.BigEndian.Uint16(buf[:])
 	p.Payload = make([]byte, length)
@@ -176,7 +189,7 @@ func (p *Publish) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
-func (p *PubAck) Marshal() (b []byte, err error) {
+func (p *PubAck) MarshalBinary() (b []byte, err error) {
 	b = make([]byte, 4)
 	b[0] = cmdPubAck
 	b[1] = 2
@@ -185,7 +198,7 @@ func (p *PubAck) Marshal() (b []byte, err error) {
 }
 
 func (p *PubAck) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.Marshal()
+	b, err := p.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -203,7 +216,7 @@ func (p *PubAck) ReadFrom(r io.Reader) (n int64, err error) {
 	} else if n < 2 {
 		return n, io.ErrUnexpectedEOF
 	} else if n > 2 {
-		return n, ErrPacketLong
+		return n, mqtt.ErrPacketLong
 	}
 	N, err = r.Read(buf[:])
 	n += int64(N)
@@ -214,7 +227,7 @@ func (p *PubAck) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
-func (p *PubRec) Marshal() (b []byte, err error) {
+func (p *PubRec) MarshalBinary() (b []byte, err error) {
 	b = make([]byte, 4)
 	b[0] = cmdPubRec
 	b[1] = 2
@@ -223,7 +236,7 @@ func (p *PubRec) Marshal() (b []byte, err error) {
 }
 
 func (p *PubRec) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.Marshal()
+	b, err := p.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -241,7 +254,7 @@ func (p *PubRec) ReadFrom(r io.Reader) (n int64, err error) {
 	} else if n < 2 {
 		return n, io.ErrUnexpectedEOF
 	} else if n > 2 {
-		return n, ErrPacketLong
+		return n, mqtt.ErrPacketLong
 	}
 	N, err = r.Read(buf[:])
 	n += int64(N)
@@ -252,7 +265,7 @@ func (p *PubRec) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
-func (p *PubRel) Marshal() (b []byte, err error) {
+func (p *PubRel) MarshalBinary() (b []byte, err error) {
 	b = make([]byte, 4)
 	b[0] = cmdPubRel
 	b[1] = 2
@@ -261,7 +274,7 @@ func (p *PubRel) Marshal() (b []byte, err error) {
 }
 
 func (p *PubRel) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.Marshal()
+	b, err := p.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -279,7 +292,7 @@ func (p *PubRel) ReadFrom(r io.Reader) (n int64, err error) {
 	} else if n < 2 {
 		return n, io.ErrUnexpectedEOF
 	} else if n > 2 {
-		return n, ErrPacketLong
+		return n, mqtt.ErrPacketLong
 	}
 	N, err = r.Read(buf[:])
 	n += int64(N)
@@ -290,7 +303,7 @@ func (p *PubRel) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
-func (p *PubComp) Marshal() (b []byte, err error) {
+func (p *PubComp) MarshalBinary() (b []byte, err error) {
 	b = make([]byte, 4)
 	b[0] = cmdPubComp
 	b[1] = 2
@@ -299,7 +312,7 @@ func (p *PubComp) Marshal() (b []byte, err error) {
 }
 
 func (p *PubComp) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.Marshal()
+	b, err := p.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -317,7 +330,7 @@ func (p *PubComp) ReadFrom(r io.Reader) (n int64, err error) {
 	} else if n < 2 {
 		return n, io.ErrUnexpectedEOF
 	} else if n > 2 {
-		return n, ErrPacketLong
+		return n, mqtt.ErrPacketLong
 	}
 	N, err = r.Read(buf[:])
 	n += int64(N)

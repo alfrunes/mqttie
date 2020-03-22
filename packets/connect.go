@@ -1,4 +1,4 @@
-package mqtt
+package packets
 
 import (
 	"bytes"
@@ -6,12 +6,28 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/alfrunes/mqttie/mqtt"
 	"github.com/alfrunes/mqttie/util"
 	"github.com/google/uuid"
 )
 
+const (
+	cmdConnect    uint8 = 0x10
+	cmdConnAck    uint8 = 0x20
+	cmdDisconnect uint8 = 0xE0
+
+	// Flags
+	ConnectFlagUsername       uint8 = 0x80
+	ConnectFlagPassword       uint8 = 0x40
+	ConnectFlagWillRetain     uint8 = 0x20
+	ConnectFlagWill           uint8 = 0x04
+	ConnectFlagCleanSession   uint8 = 0x02
+	ConnAckFlagMaskv311       uint8 = 0x01
+	ConnAckFlagSessionPresent uint8 = 0x01
+)
+
 type Connect struct {
-	Version      version
+	Version      mqtt.Version
 	CleanSession bool
 	KeepAlive    uint16
 
@@ -29,33 +45,33 @@ type Connect struct {
 type ConnAck struct {
 	SessionPresent bool
 	ReturnCode     uint8
-	Version        version
+	Version        mqtt.Version
 }
 
 type Disconnect struct {
-	Version version
+	Version mqtt.Version
 }
 
-func NewConnectPacket(version version, keepAlive uint16) *Connect {
+func NewConnectPacket(version mqtt.Version, keepAlive uint16) *Connect {
 	return &Connect{
 		Version:   version,
 		KeepAlive: keepAlive,
 	}
 }
 
-func NewConnAckPacket(version version) *ConnAck {
+func NewConnAckPacket(version mqtt.Version) *ConnAck {
 	return &ConnAck{
 		Version: version,
 	}
 }
 
-func NewDisconnectPacket(version version) *Disconnect {
+func NewDisconnectPacket(version mqtt.Version) *Disconnect {
 	return &Disconnect{
 		Version: version,
 	}
 }
 
-func (c *Connect) Marshal() (b []byte, err error) {
+func (c *Connect) MarshalBinary() (b []byte, err error) {
 	var i int
 	var flags uint8
 	var buf [4]byte
@@ -152,7 +168,7 @@ func (c *Connect) Marshal() (b []byte, err error) {
 
 // WriteTo marshals and writes the connect request to the stream w.
 func (c *Connect) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := c.Marshal()
+	b, err := c.MarshalBinary()
 	if err != nil {
 		return 0, err
 	}
@@ -180,16 +196,16 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if length <= 0 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 	// Parse variable header
 	if bytes.Compare(buf[2:6], []byte{'M', 'Q', 'T', 'T'}) != 0 {
 		return n, fmt.Errorf(
 			"connect: unknown protocol: %s", string(buf[2:6]))
 	}
-	switch version(buf[6]) {
-	case MQTTv311:
-		c.Version = MQTTv311
+	switch mqtt.Version(buf[6]) {
+	case mqtt.MQTTv311:
+		c.Version = mqtt.MQTTv311
 	default:
 		return n, fmt.Errorf(
 			"connect: unknown protocol version: %d", buf[6])
@@ -215,7 +231,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if length -= N; length < 0 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 	if flags&ConnectFlagWill > 0 {
 		c.WillTopic, N, err = util.ReadUTF8(r)
@@ -223,14 +239,14 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		} else if length -= N; length < 0 {
-			return n, ErrPacketShort
+			return n, mqtt.ErrPacketShort
 		}
 		N, err = r.Read(buf[:2])
 		n += int64(N)
 		if err != nil {
 			return n, err
 		} else if length -= N; length < 0 {
-			return n, ErrPacketShort
+			return n, mqtt.ErrPacketShort
 		}
 		l16 := binary.BigEndian.Uint16(buf[:2])
 		c.WillMessage = make([]byte, l16-2)
@@ -239,7 +255,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		} else if length -= N; length < 0 {
-			return n, ErrPacketShort
+			return n, mqtt.ErrPacketShort
 		}
 	}
 
@@ -249,7 +265,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		} else if length -= N; length < 0 {
-			return n, ErrPacketShort
+			return n, mqtt.ErrPacketShort
 		}
 		if flags&ConnectFlagPassword > 0 {
 			c.Password, N, err = util.ReadUTF8(r)
@@ -257,7 +273,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 			if err != nil {
 				return n, err
 			} else if length -= N; length < 0 {
-				return n, ErrPacketShort
+				return n, mqtt.ErrPacketShort
 			}
 		}
 	}
@@ -265,7 +281,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, nil
 }
 
-func (c *ConnAck) Marshal() (b []byte, err error) {
+func (c *ConnAck) MarshalBinary() (b []byte, err error) {
 	b = []byte{cmdConnAck, 2, 0, c.ReturnCode}
 	if c.SessionPresent {
 		b[2] |= ConnAckFlagSessionPresent
@@ -275,7 +291,7 @@ func (c *ConnAck) Marshal() (b []byte, err error) {
 
 // WriteTo writes the marshaled ConnAck packet to the stream w.
 func (c *ConnAck) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := c.Marshal()
+	b, err := c.MarshalBinary()
 	if err != nil {
 		return 0, err
 	}
@@ -300,13 +316,13 @@ func (c *ConnAck) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, nil
 }
 
-func (d *Disconnect) Marshal() (b []byte, err error) {
+func (d *Disconnect) MarshalBinary() (b []byte, err error) {
 	return []byte{cmdDisconnect, 0}, nil
 }
 
 // WriteTo writes the marshaled Disconnect request to stream.
 func (d *Disconnect) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := d.Marshal()
+	b, err := d.MarshalBinary()
 	if err != nil {
 		return 0, err
 	}

@@ -1,10 +1,18 @@
-package mqtt
+package packets
 
 import (
 	"encoding/binary"
 	"io"
 
+	"github.com/alfrunes/mqttie/mqtt"
 	"github.com/alfrunes/mqttie/util"
+)
+
+const (
+	cmdSubscribe   uint8 = 0x80
+	cmdSubAck      uint8 = 0x90
+	cmdUnsubscribe uint8 = 0xA0
+	cmdUnsubAck    uint8 = 0xB0
 )
 
 type TopicFilter struct {
@@ -13,7 +21,7 @@ type TopicFilter struct {
 }
 
 type Subscribe struct {
-	Version version
+	Version mqtt.Version
 
 	PacketIdentifier uint16
 
@@ -22,7 +30,7 @@ type Subscribe struct {
 }
 
 type SubAck struct {
-	Version version
+	Version mqtt.Version
 
 	PacketIdentifier uint16
 
@@ -30,7 +38,7 @@ type SubAck struct {
 }
 
 type Unsubscribe struct {
-	Version version
+	Version mqtt.Version
 
 	PacketIdentifier uint16
 
@@ -38,12 +46,12 @@ type Unsubscribe struct {
 }
 
 type UnsubAck struct {
-	Version version
+	Version mqtt.Version
 
 	PacketIdentifier uint16
 }
 
-func (s *Subscribe) Marshal() (b []byte, err error) {
+func (s *Subscribe) MarshalBinary() (b []byte, err error) {
 	var buf [4]byte
 	var i uint32
 	var payloadLength int64
@@ -58,7 +66,7 @@ func (s *Subscribe) Marshal() (b []byte, err error) {
 	remainingLength := payloadLength + 2
 	if remainingLength > int64(^uint32(0)) {
 		// Casting to uint32 overflows
-		return nil, ErrPacketLong
+		return nil, mqtt.ErrPacketLong
 	}
 	N, err := util.EncodeUvarint(buf[:], uint32(remainingLength))
 	if err != nil {
@@ -85,7 +93,7 @@ func (s *Subscribe) Marshal() (b []byte, err error) {
 }
 
 func (s *Subscribe) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := s.Marshal()
+	buf, err := s.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -109,7 +117,7 @@ func (s *Subscribe) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if length <= 0 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 	s.PacketIdentifier = binary.BigEndian.Uint16(buf[:])
 
@@ -129,7 +137,7 @@ func (s *Subscribe) ReadFrom(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		} else if length < 0 {
-			return n, ErrPacketShort
+			return n, mqtt.ErrPacketShort
 		}
 		topicFilter.QoS = buf[0]
 		s.Topics = append(s.Topics, topicFilter)
@@ -137,7 +145,7 @@ func (s *Subscribe) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
-func (s *SubAck) Marshal() (b []byte, err error) {
+func (s *SubAck) MarshalBinary() (b []byte, err error) {
 	var i int
 	var buf [4]byte
 	remLength := len(s.ReturnCodes) + 2
@@ -165,7 +173,7 @@ func (s *SubAck) Marshal() (b []byte, err error) {
 }
 
 func (s *SubAck) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := s.Marshal()
+	b, err := s.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -187,7 +195,7 @@ func (s *SubAck) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if length -= N; length <= 0 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 	s.PacketIdentifier = binary.BigEndian.Uint16(buf[:])
 
@@ -197,7 +205,7 @@ func (s *SubAck) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
-func (u *Unsubscribe) Marshal() (b []byte, err error) {
+func (u *Unsubscribe) MarshalBinary() (b []byte, err error) {
 	var i int
 	var buf [4]byte
 	var remLength int = 2
@@ -226,7 +234,7 @@ func (u *Unsubscribe) Marshal() (b []byte, err error) {
 }
 
 func (u *Unsubscribe) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := u.Marshal()
+	b, err := u.MarshalBinary()
 	if err != nil {
 		return 0, err
 	}
@@ -249,7 +257,7 @@ func (u *Unsubscribe) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if length <= 0 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	}
 
 	u.Topics = []string{}
@@ -260,21 +268,21 @@ func (u *Unsubscribe) ReadFrom(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		} else if length < 0 {
-			return n, ErrPacketShort
+			return n, mqtt.ErrPacketShort
 		}
 		u.Topics = append(u.Topics, topic)
 	}
 	return n, err
 }
 
-func (u *UnsubAck) Marshal() (b []byte, err error) {
+func (u *UnsubAck) MarshalBinary() (b []byte, err error) {
 	b = []byte{cmdUnsubAck, 2, 0, 0}
 	binary.BigEndian.PutUint16(b[2:], u.PacketIdentifier)
 	return b, nil
 }
 
 func (u *UnsubAck) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := u.Marshal()
+	b, err := u.MarshalBinary()
 	if err != nil {
 		return n, err
 	}
@@ -290,9 +298,9 @@ func (u *UnsubAck) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	} else if remLength < 2 {
-		return n, ErrPacketShort
+		return n, mqtt.ErrPacketShort
 	} else if remLength > 2 {
-		return n, ErrPacketLong
+		return n, mqtt.ErrPacketLong
 	}
 	N, err = r.Read(buf[:])
 	n += int64(N)
