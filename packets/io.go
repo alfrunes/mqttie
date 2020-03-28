@@ -12,10 +12,6 @@ var (
 	recvMutex = make(chan struct{}, 1)
 )
 
-const (
-	cmdAuth = 0xFF
-)
-
 // Send writes the packet p to stream w, ensuring mutual exclusive access.
 func Send(w io.Writer, p mqtt.Packet) (n int, err error) {
 	sendMutex <- struct{}{}
@@ -188,9 +184,6 @@ func Recv(r io.Reader) (p mqtt.Packet, err error) {
 		}
 		p = pkg
 
-	case cmdAuth:
-		// TODO: MQTT v5
-		fallthrough
 	default:
 		return nil, fmt.Errorf("invalid command byte: 0x%02X", cmd)
 	}
