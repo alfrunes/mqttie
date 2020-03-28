@@ -8,15 +8,19 @@ import (
 )
 
 var (
-	sendMutex = make(chan struct{})
-	recvMutex = make(chan struct{})
+	sendMutex = make(chan struct{}, 1)
+	recvMutex = make(chan struct{}, 1)
+)
+
+const (
+	cmdAuth = 0xFF
 )
 
 // Send writes the packet p to stream w, ensuring mutual exclusive access.
 func Send(w io.Writer, p mqtt.Packet) (n int, err error) {
 	sendMutex <- struct{}{}
+	defer func() { <-sendMutex }()
 	N, err := p.WriteTo(w)
-	<-sendMutex
 	n = int(N)
 	return n, err
 }
@@ -66,6 +70,7 @@ func Recv(r io.Reader) (p mqtt.Packet, err error) {
 		if cmdByte&PublishFlagRetain > 0 {
 			pkg.Retain = true
 		}
+		pkg.Topic.QoS = mqtt.QoS((cmdByte & 0x06) >> 1)
 
 		_, err = pkg.ReadFrom(r)
 		if err != nil {
@@ -155,7 +160,7 @@ func Recv(r io.Reader) (p mqtt.Packet, err error) {
 
 	case cmdPingReq:
 		pkg := &PingReq{
-			Version: mqttt.MQTTv311,
+			Version: mqtt.MQTTv311,
 		}
 		_, err := pkg.ReadFrom(r)
 		if err != nil {

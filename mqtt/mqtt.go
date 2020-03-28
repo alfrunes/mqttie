@@ -16,8 +16,10 @@ const (
 )
 
 var (
-	ErrPacketShort = fmt.Errorf("packet malformed: length too short")
-	ErrPacketLong  = fmt.Errorf("packet malformed: length too long")
+	ErrPacketShort = fmt.Errorf("malformed packet: length too short")
+	ErrPacketLong  = fmt.Errorf("malformed packet: length too long")
+
+	ErrIllegalQoS = fmt.Errorf("invalid QoS value")
 )
 
 type Version uint8
@@ -28,4 +30,9 @@ type Packet interface {
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
 	MarshalBinary() (b []byte, err error)
+}
+
+type Topic struct {
+	Name string
+	QoS  QoS
 }

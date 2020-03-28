@@ -15,18 +15,13 @@ const (
 	cmdUnsubAck    uint8 = 0xB0
 )
 
-type TopicFilter struct {
-	Topic string
-	QoS   uint8
-}
-
 type Subscribe struct {
 	Version mqtt.Version
 
 	PacketIdentifier uint16
 
 	// Payload
-	Topics []TopicFilter
+	Topics []mqtt.Topic
 }
 
 type SubAck struct {
@@ -53,13 +48,11 @@ type UnsubAck struct {
 
 func (s *Subscribe) MarshalBinary() (b []byte, err error) {
 	var buf [4]byte
-	var i uint32
+	var i int
 	var payloadLength int64
 	for _, topic := range s.Topics {
 		// Add length of utf-8 encoded topics + QoS byte
-		// TODO: Fix len to handle number of bytes for general
-		//       utf-8 strings
-		payloadLength += int64(len(topic.Topic) + 3)
+		payloadLength += int64(len(topic.Name) + 3)
 	}
 
 	// Remaining length = payloadLength + len(packetIdentifier)
@@ -76,17 +69,18 @@ func (s *Subscribe) MarshalBinary() (b []byte, err error) {
 	// FIXME: the flag section may change across versions
 	b[0] = cmdSubscribe | 0x02
 	i++
+	i += copy(b[i:], buf[:N])
 	binary.BigEndian.PutUint16(b[i:], s.PacketIdentifier)
 	i += 2
 
 	// Payload
 	for _, topic := range s.Topics {
-		n, err := util.EncodeUTF8(b[i:], topic.Topic)
+		n, err := util.EncodeUTF8(b[i:], topic.Name)
 		if err != nil {
 			return nil, err
 		}
-		i += uint32(n)
-		b[i] = topic.QoS
+		i += n
+		b[i] = byte(topic.QoS)
 		i++
 	}
 	return b, nil
@@ -122,10 +116,10 @@ func (s *Subscribe) ReadFrom(r io.Reader) (n int64, err error) {
 	s.PacketIdentifier = binary.BigEndian.Uint16(buf[:])
 
 	// Payload
-	s.Topics = []TopicFilter{}
+	s.Topics = []mqtt.Topic{}
 	for length > 0 {
-		topicFilter := TopicFilter{}
-		topicFilter.Topic, N, err = util.ReadUTF8(r)
+		topicFilter := mqtt.Topic{}
+		topicFilter.Name, N, err = util.ReadUTF8(r)
 		n += int64(N)
 		length -= N
 		if err != nil {
@@ -139,7 +133,7 @@ func (s *Subscribe) ReadFrom(r io.Reader) (n int64, err error) {
 		} else if length < 0 {
 			return n, mqtt.ErrPacketShort
 		}
-		topicFilter.QoS = buf[0]
+		topicFilter.QoS = mqtt.QoS(buf[0])
 		s.Topics = append(s.Topics, topicFilter)
 	}
 	return n, err
@@ -158,7 +152,7 @@ func (s *SubAck) MarshalBinary() (b []byte, err error) {
 
 	b[0] = cmdSubAck
 	i++
-	i += copy(b[i:], b[:n])
+	i += copy(b[i:], buf[:n])
 
 	// Variable header
 	binary.BigEndian.PutUint16(b[i:], s.PacketIdentifier)
@@ -217,10 +211,15 @@ func (u *Unsubscribe) MarshalBinary() (b []byte, err error) {
 	b = make([]byte, n+remLength+1)
 	// Fixed header
 	b[0] = cmdUnsubscribe
+	if u.Version == mqtt.MQTTv311 {
+		b[0] |= 0x02
+	}
 	i++
 
 	// Variable header
 	i += copy(b[i:], buf[:n])
+	binary.BigEndian.PutUint16(b[i:], u.PacketIdentifier)
+	i += 2
 
 	// Payload
 	for _, topic := range u.Topics {

@@ -24,10 +24,7 @@ func (p *PingReq) MarshalBinary() (b []byte, err error) {
 }
 
 func (p *PingReq) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.MarshalBinary()
-	if err != nil {
-		return n, err
-	}
+	b, _ := p.MarshalBinary()
 	N, err := w.Write(b)
 	n = int64(N)
 	return n, err
@@ -39,7 +36,7 @@ func (p *PingReq) ReadFrom(r io.Reader) (n int64, err error) {
 	n = int64(N)
 	if err != nil {
 		return n, err
-	} else if N > 0 {
+	} else if buf[0] > byte(0) {
 		return n, mqtt.ErrPacketLong
 	}
 	return n, nil
@@ -50,10 +47,7 @@ func (p *PingResp) MarshalBinary() (b []byte, err error) {
 }
 
 func (p *PingResp) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := p.MarshalBinary()
-	if err != nil {
-		return n, err
-	}
+	b, _ := p.MarshalBinary()
 	N, err := w.Write(b)
 	n = int64(N)
 	return n, err

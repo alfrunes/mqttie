@@ -20,16 +20,16 @@ func EncodeUvarint(b []byte, val uint32) (n int, err error) {
 }
 
 func ReadVarint(r io.Reader) (v uint32, n int, err error) {
-	var b uint8
+	var b [1]byte
 	// Read up to maximum of 4 bytes
 	for i := 0; i < 32; i += 8 {
-		N, err := r.Read([]byte{b})
+		N, err := r.Read(b[:])
 		n += N
 		if err != nil {
 			return v, n, err
 		}
-		v += (uint32(b&0x7F) << i)
-		if b&0x80 > 0 {
+		v += (uint32(b[0]&0x7F) << i)
+		if b[0]&0x80 == 0 {
 			return v, n, err
 		}
 	}

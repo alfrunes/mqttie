@@ -24,6 +24,7 @@ const (
 	ConnectFlagCleanSession   uint8 = 0x02
 	ConnAckFlagMaskv311       uint8 = 0x01
 	ConnAckFlagSessionPresent uint8 = 0x01
+	ConnectMaskWillQoS        uint8 = 0x18
 )
 
 type Connect struct {
@@ -33,9 +34,8 @@ type Connect struct {
 
 	ClientID string
 
-	WillTopic   string
+	WillTopic   mqtt.Topic
 	WillMessage []byte
-	WillQoS     uint8
 	WillRetain  bool
 
 	Username string
@@ -52,25 +52,6 @@ type Disconnect struct {
 	Version mqtt.Version
 }
 
-func NewConnectPacket(version mqtt.Version, keepAlive uint16) *Connect {
-	return &Connect{
-		Version:   version,
-		KeepAlive: keepAlive,
-	}
-}
-
-func NewConnAckPacket(version mqtt.Version) *ConnAck {
-	return &ConnAck{
-		Version: version,
-	}
-}
-
-func NewDisconnectPacket(version mqtt.Version) *Disconnect {
-	return &Disconnect{
-		Version: version,
-	}
-}
-
 func (c *Connect) MarshalBinary() (b []byte, err error) {
 	var i int
 	var flags uint8
@@ -78,7 +59,7 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	// Initialize length to fixed variable header length:
 	//     "MQTT" + version + Flags + KeepAlive
 	var length int = 10
-	if c.WillQoS > 2 {
+	if c.WillTopic.QoS > 2 {
 		return nil, fmt.Errorf("illegal QoS value (highest: 2)")
 	}
 	// Compute Flags
@@ -93,9 +74,9 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 			flags |= ConnectFlagPassword
 		}
 	}
-	if c.WillTopic != "" {
-		length += len(c.WillTopic) + len(c.WillMessage) + 4
-		flags |= (c.WillQoS << 3) | ConnectFlagWill
+	if c.WillTopic.Name != "" {
+		length += len(c.WillTopic.Name) + len(c.WillMessage) + 4
+		flags |= (uint8(c.WillTopic.QoS) << 3) | ConnectFlagWill
 		if c.WillRetain {
 			flags |= ConnectFlagWillRetain
 		}
@@ -122,9 +103,6 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	// Variable header
 	i += copy(b[i:], []byte{0, 4, 'M', 'Q', 'T', 'T',
 		uint8(c.Version), flags})
-	if err != nil {
-		return nil, err
-	}
 	binary.BigEndian.PutUint16(b[i:], c.KeepAlive)
 	i += 2
 
@@ -135,14 +113,14 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	}
 	i += n
 
-	if c.WillTopic != "" {
-		n, err = util.EncodeUTF8(b[i:], c.WillTopic)
+	if c.WillTopic.Name != "" {
+		n, err = util.EncodeUTF8(b[i:], c.WillTopic.Name)
 		if err != nil {
 			return nil, err
 		}
 		i += n
 		l := len(c.WillMessage) + 2
-		if l > 0xFFFFFFFF {
+		if l > int(^uint16(0)) {
 			return nil, fmt.Errorf("connect: WillMessage too long")
 		}
 		binary.BigEndian.PutUint16(b[i:], uint16(l))
@@ -188,6 +166,9 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	length := int(l)
 	n = int64(N)
+	if length <= 12 {
+		return n, mqtt.ErrPacketShort
+	}
 
 	// Read variable header
 	N, err = r.Read(buf[:])
@@ -195,8 +176,6 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	length -= N
 	if err != nil {
 		return n, err
-	} else if length <= 0 {
-		return n, mqtt.ErrPacketShort
 	}
 	// Parse variable header
 	if bytes.Compare(buf[2:6], []byte{'M', 'Q', 'T', 'T'}) != 0 {
@@ -212,7 +191,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	flags := uint8(buf[7])
 	if flags&ConnectFlagWillRetain > 0 {
-		if flags&ConnectFlagWill > 0 {
+		if flags&ConnectFlagWill == 0 {
 			return n, fmt.Errorf(
 				"connect: illegal flag composition: 0x%02X",
 				flags,
@@ -223,7 +202,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 	if flags&ConnectFlagCleanSession > 0 {
 		c.CleanSession = true
 	}
-	binary.BigEndian.PutUint16(buf[8:], c.KeepAlive)
+	c.KeepAlive = binary.BigEndian.Uint16(buf[8:])
 
 	// Payload
 	c.ClientID, N, err = util.ReadUTF8(r)
@@ -234,8 +213,9 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, mqtt.ErrPacketShort
 	}
 	if flags&ConnectFlagWill > 0 {
-		c.WillTopic, N, err = util.ReadUTF8(r)
-		n += int64(len(c.WillTopic) + 2)
+		c.WillTopic.QoS = mqtt.QoS(flags&ConnectMaskWillQoS) >> 3
+		c.WillTopic.Name, N, err = util.ReadUTF8(r)
+		n += int64(len(c.WillTopic.Name) + 2)
 		if err != nil {
 			return n, err
 		} else if length -= N; length < 0 {
@@ -291,10 +271,7 @@ func (c *ConnAck) MarshalBinary() (b []byte, err error) {
 
 // WriteTo writes the marshaled ConnAck packet to the stream w.
 func (c *ConnAck) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := c.MarshalBinary()
-	if err != nil {
-		return 0, err
-	}
+	b, _ := c.MarshalBinary()
 	N, err := w.Write(b)
 	n = int64(N)
 	return n, err
@@ -303,16 +280,21 @@ func (c *ConnAck) WriteTo(w io.Writer) (n int64, err error) {
 // ReadFrom reads and unmarshals the ConnAck request from stream.
 // NOTE: it is assumed that the command byte is already consumed from the reader.
 func (c *ConnAck) ReadFrom(r io.Reader) (n int64, err error) {
-	var raw [4]byte
+	var raw [3]byte
 	N, err := r.Read(raw[:])
 	n = int64(N)
-	flags := raw[2]
+	if raw[0] > byte(2) {
+		return n, mqtt.ErrPacketLong
+	} else if raw[0] < byte(2) {
+		return n, mqtt.ErrPacketShort
+	}
+	flags := raw[1]
 	if flags > ConnAckFlagSessionPresent {
 		return n, fmt.Errorf("connack: illegal flags: %02X", flags)
 	} else if flags&ConnAckFlagSessionPresent > 0 {
 		c.SessionPresent = true
 	}
-	c.ReturnCode = raw[3]
+	c.ReturnCode = raw[2]
 	return n, nil
 }
 
@@ -322,10 +304,7 @@ func (d *Disconnect) MarshalBinary() (b []byte, err error) {
 
 // WriteTo writes the marshaled Disconnect request to stream.
 func (d *Disconnect) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := d.MarshalBinary()
-	if err != nil {
-		return 0, err
-	}
+	b, _ := d.MarshalBinary()
 	N, err := w.Write(b)
 	n = int64(N)
 	return n, err
