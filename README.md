@@ -1,4 +1,6 @@
 # MQTTie - a MQTT protocol library written in go
+[![Actions Status](https://github.com/alfrunes/mqttie/workflows/Go/badge.svg)](https://github.com/alfrunes/mqttie/actions)
+[![codecov](https://codecov.io/gh/alfrunes/mqttie/branch/master/graph/badge.svg)](https://codecov.io/gh/alfrunes/mqttie)
 
 ## Package structure:
 ├── client - The MQTT client package.  
