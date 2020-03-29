@@ -8,7 +8,7 @@ import (
 
 	"github.com/alfrunes/mqttie/mqtt"
 	"github.com/alfrunes/mqttie/util"
-	"github.com/google/uuid"
+	"github.com/satori/go.uuid"
 )
 
 const (
@@ -91,11 +91,8 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	}
 
 	if len(c.ClientID) == 0 {
-		uuid, err := uuid.NewRandom()
-		if err != nil {
-			return nil, err
-		}
-		c.ClientID = uuid.String()
+		id := uuid.NewV4()
+		c.ClientID = id.String()
 	}
 	length += len(c.ClientID) + 2
 	l, err := util.EncodeUvarint(buf[:], uint32(length))

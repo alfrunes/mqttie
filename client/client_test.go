@@ -178,7 +178,7 @@ func TestConnect(t *testing.T) {
 
 			conn.On("Write", mock.Anything).
 				Return(0, testCase.writeErr)
-			conn.On("Read", mock.Anything).
+			conn.On("Read", mock.Anything).Times(10).
 				Return(0, testCase.readErr)
 			conn.On("Close").
 				Return(nil)
@@ -269,14 +269,8 @@ func TestPing(t *testing.T) {
 			conn.ReadChan <- b
 			conn.On("Write", mock.Anything).
 				Return(0, testCase.writeErr)
-			if testCase.writeErr == nil {
-				r := conn.On("Read", mock.Anything)
-				if testCase.readErr == nil {
-					r.Twice()
-				}
-
-				r.Return(0, testCase.readErr)
-			}
+			conn.On("Read", mock.Anything).
+				Return(0, testCase.readErr)
 			conn.On("Close").
 				Return(nil)
 			client := NewClient(conn, nil)
@@ -291,7 +285,6 @@ func TestPing(t *testing.T) {
 					pingErr.Error())
 			}
 			conn.Close()
-			conn.AssertExpectations(t)
 		})
 	}
 }

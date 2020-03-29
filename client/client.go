@@ -57,7 +57,7 @@ type Client struct {
 // connection will lead to the client throwing an error.
 func NewClient(connection net.Conn, options ...*ClientOptions) (client *Client) {
 	var r [2]byte
-	id, _ := uuid.NewV4()
+	id := uuid.NewV4()
 	client = &Client{
 		ClientID: id.String(),
 		version:  mqtt.MQTTv311,
