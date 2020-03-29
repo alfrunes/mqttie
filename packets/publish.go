@@ -76,9 +76,12 @@ func (p *Publish) MarshalBinary() (b []byte, err error) {
 		fixedHeader |= PublishFlagRetain
 	}
 	// Remaining length = len(utf-8(topicName))
-	//                  + len(packageIdentifier)
 	//                  + len(payload)
-	remLength := uint32(len(p.Topic.Name) + 4 + len(p.Payload))
+	//                  + (qos > 0 ) ? len(packet id) : 0
+	remLength := uint32(len(p.Topic.Name) + 2 + len(p.Payload))
+	if p.Topic.QoS > 0 {
+		remLength += 2
+	}
 
 	n, err := util.EncodeUvarint(buf[:], remLength)
 	if err != nil {
@@ -99,8 +102,10 @@ func (p *Publish) MarshalBinary() (b []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	binary.BigEndian.PutUint16(b[i:], p.PacketIdentifier)
-	i += 2
+	if p.Topic.QoS > 0 {
+		binary.BigEndian.PutUint16(b[i:], p.PacketIdentifier)
+		i += 2
+	}
 	copy(b[i:], p.Payload)
 	return b, err
 }
@@ -134,16 +139,18 @@ func (p *Publish) ReadFrom(r io.Reader) (n int64, err error) {
 	} else if length <= 0 {
 		return n, mqtt.ErrPacketShort
 	}
-	N, err = r.Read(buf[:])
-	length -= N
-	n += int64(N)
-	if err != nil {
-		return n, err
-	} else if length < 0 {
-		// NOTE: payload can be zero length
-		return n, mqtt.ErrPacketShort
+	if p.QoS > 0 {
+		N, err = r.Read(buf[:])
+		length -= N
+		n += int64(N)
+		if err != nil {
+			return n, err
+		} else if length < 0 {
+			// NOTE: payload can be zero length
+			return n, mqtt.ErrPacketShort
+		}
+		p.PacketIdentifier = binary.BigEndian.Uint16(buf[:])
 	}
-	p.PacketIdentifier = binary.BigEndian.Uint16(buf[:])
 	p.Payload = make([]byte, length)
 	N, err = r.Read(p.Payload)
 	n += int64(N)

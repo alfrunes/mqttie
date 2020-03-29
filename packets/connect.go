@@ -25,6 +25,14 @@ const (
 	ConnAckFlagMaskv311       uint8 = 0x01
 	ConnAckFlagSessionPresent uint8 = 0x01
 	ConnectMaskWillQoS        uint8 = 0x18
+
+	// ConnAck status codes
+	ConnAckAccepted       = 0x00
+	ConnAckBadVersion     = 0x01
+	ConnAckIDNotAllowed   = 0x02
+	ConnAckServerUnavail  = 0x03
+	ConnAckBadCredentials = 0x04
+	ConnAckUnauthorized   = 0x05
 )
 
 type Connect struct {
