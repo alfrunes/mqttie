@@ -2,32 +2,61 @@ package packets
 
 import (
 	"fmt"
-	"io"
+	"net"
+	"time"
 
 	"github.com/alfrunes/mqttie/mqtt"
 )
 
-var (
-	sendMutex = make(chan struct{}, 1)
-	recvMutex = make(chan struct{}, 1)
-)
+type IO interface {
+	Send(p mqtt.Packet) (err error)
+	Recv() (p mqtt.Packet, err error)
+	Close() error
+}
+
+type PacketIO struct {
+	timeout   time.Duration
+	conn      net.Conn
+	version   mqtt.Version
+	sendMutex chan struct{}
+	recvMutex chan struct{}
+}
+
+func NewPacketIO(
+	conn net.Conn,
+	version mqtt.Version,
+	timeout time.Duration,
+) IO {
+	return &PacketIO{
+		timeout:   timeout,
+		conn:      conn,
+		version:   version,
+		sendMutex: make(chan struct{}, 1),
+		recvMutex: make(chan struct{}, 1),
+	}
+}
 
 // Send writes the packet p to stream w, ensuring mutual exclusive access.
-func Send(w io.Writer, p mqtt.Packet) (n int, err error) {
-	sendMutex <- struct{}{}
-	defer func() { <-sendMutex }()
-	N, err := p.WriteTo(w)
-	n = int(N)
-	return n, err
+func (p *PacketIO) Send(pkt mqtt.Packet) (err error) {
+	p.sendMutex <- struct{}{}
+	defer func() { <-p.sendMutex }()
+	if p.timeout > time.Duration(0) {
+		p.conn.SetWriteDeadline(time.Now().Add(p.timeout))
+	}
+	_, err = pkt.WriteTo(p.conn)
+	return err
 }
 
 // Recv reads and encodes a packet from stream. The Recv operation is protected
 // by a mutex, but should only be handled by a single goroutine.
-func Recv(r io.Reader) (p mqtt.Packet, err error) {
+func (p *PacketIO) Recv() (pkg mqtt.Packet, err error) {
 	var buf [1]byte
-	recvMutex <- struct{}{}
-	defer func() { <-recvMutex }()
-	_, err = r.Read(buf[:])
+	p.recvMutex <- struct{}{}
+	defer func() { <-p.recvMutex }()
+	if p.timeout > time.Duration(0) {
+		p.conn.SetWriteDeadline(time.Now().Add(p.timeout))
+	}
+	_, err = p.conn.Read(buf[:])
 	if err != nil {
 		return nil, err
 	}
@@ -37,156 +66,160 @@ func Recv(r io.Reader) (p mqtt.Packet, err error) {
 	switch cmd {
 	// TODO: Support for different MQTT versions
 	case cmdConnect:
-		pkg := &Connect{
-			Version: mqtt.MQTTv311,
+		connect := &Connect{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := connect.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = connect
 
 	case cmdConnAck:
-		pkg := &ConnAck{
-			Version: mqtt.MQTTv311,
+		connAck := &ConnAck{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := connAck.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = connAck
 
 	case cmdPublish:
-		pkg := &Publish{
-			Version: mqtt.MQTTv311,
+		pub := &Publish{
+			Version: p.version,
 		}
 		if cmdByte&PublishFlagDuplicate > 0 {
-			pkg.Duplicate = true
+			pub.Duplicate = true
 		}
 		if cmdByte&PublishFlagRetain > 0 {
-			pkg.Retain = true
+			pub.Retain = true
 		}
-		pkg.Topic.QoS = mqtt.QoS((cmdByte & 0x06) >> 1)
+		pub.Topic.QoS = mqtt.QoS((cmdByte & 0x06) >> 1)
 
-		_, err = pkg.ReadFrom(r)
+		_, err = pub.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = pub
 
 	case cmdPubAck:
-		pkg := &PubAck{
-			Version: mqtt.MQTTv311,
+		pubAck := &PubAck{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := pubAck.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = pubAck
 
 	case cmdPubRec:
-		pkg := &PubRec{
-			Version: mqtt.MQTTv311,
+		pubRec := &PubRec{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := pubRec.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = pubRec
 
 	case cmdPubRel:
-		pkg := &PubRel{
-			Version: mqtt.MQTTv311,
+		pubRel := &PubRel{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := pubRel.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = pubRel
 
 	case cmdPubComp:
-		pkg := &PubComp{
-			Version: mqtt.MQTTv311,
+		pubComp := &PubComp{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := pubComp.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = pubComp
 
 	case cmdSubscribe:
-		pkg := &Subscribe{
-			Version: mqtt.MQTTv311,
+		sub := &Subscribe{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := sub.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = sub
 
 	case cmdSubAck:
-		pkg := &SubAck{
-			Version: mqtt.MQTTv311,
+		subAck := &SubAck{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := subAck.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = subAck
 
 	case cmdUnsubscribe:
-		pkg := &Unsubscribe{
-			Version: mqtt.MQTTv311,
+		unSub := &Unsubscribe{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := unSub.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = unSub
 
 	case cmdUnsubAck:
-		pkg := &UnsubAck{
-			Version: mqtt.MQTTv311,
+		unsubAck := &UnsubAck{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := unsubAck.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = unsubAck
 
 	case cmdPingReq:
-		pkg := &PingReq{
-			Version: mqtt.MQTTv311,
+		ping := &PingReq{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := ping.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = ping
 
 	case cmdPingResp:
-		pkg := &PingResp{
-			Version: mqtt.MQTTv311,
+		pingRsp := &PingResp{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := pingRsp.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = pingRsp
 
 	case cmdDisconnect:
-		pkg := &Disconnect{
-			Version: mqtt.MQTTv311,
+		disconnect := &Disconnect{
+			Version: p.version,
 		}
-		_, err := pkg.ReadFrom(r)
+		_, err := disconnect.ReadFrom(p.conn)
 		if err != nil {
 			return nil, err
 		}
-		p = pkg
+		pkg = disconnect
 
 	default:
 		return nil, fmt.Errorf("invalid command byte: 0x%02X", cmd)
 	}
 
-	return p, err
+	return pkg, err
+}
+
+func (p *PacketIO) Close() error {
+	return p.conn.Close()
 }

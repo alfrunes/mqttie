@@ -281,10 +281,7 @@ func (u *UnsubAck) MarshalBinary() (b []byte, err error) {
 }
 
 func (u *UnsubAck) WriteTo(w io.Writer) (n int64, err error) {
-	b, err := u.MarshalBinary()
-	if err != nil {
-		return n, err
-	}
+	b, _ := u.MarshalBinary()
 	N, err := w.Write(b)
 	n = int64(N)
 	return n, err
