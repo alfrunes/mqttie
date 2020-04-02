@@ -12,6 +12,8 @@ type ClientOptions struct {
 	// The client identity communicated with the server. Defaults to random
 	// UUID (version 4).
 	ClientID *string
+	// Timeout sets the duration for how long the client blocks on requests.
+	Timeout *time.Duration
 }
 
 func NewClientOptions() *ClientOptions {
@@ -24,6 +26,10 @@ func (opts *ClientOptions) SetVersion(version mqtt.Version) {
 
 func (opts *ClientOptions) SetClientID(id string) {
 	opts.ClientID = &id
+}
+
+func (opts *ClientOptions) SetTimeout(timeout time.Duration) {
+	opts.Timeout = &timeout
 }
 
 type ConnectOptions struct {
@@ -85,4 +91,16 @@ func (opts *ConnectOptions) SetWillTopic(topic mqtt.Topic, retain bool) {
 
 func (opts *ConnectOptions) SetWillMessage(message []byte) {
 	opts.WillMessage = message
+}
+
+type PublishOptions struct {
+	Retain *bool
+}
+
+func NewPublishOptions() *PublishOptions {
+	return &PublishOptions{}
+}
+
+func (opts *PublishOptions) SetRetain(retain bool) {
+	opts.Retain = &retain
 }

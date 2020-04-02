@@ -15,9 +15,9 @@ func (c *Client) aquirePacketID() uint16 {
 	for i := 0; i < int(^uint16(0)); i++ {
 		newVal := atomic.AddUint32(&c.packetIDCounter, 1)
 		ret := uint16(newVal)
-		if _, ok := c.pendingPackets[ret]; ok {
+		if _, ok := c.pendingPackets.Get(ret); ok {
 			continue
-		} else if _, ok := c.ackChan[ret]; ok {
+		} else if _, ok := c.ackChan.Get(ret); ok {
 			continue
 		} else {
 			return ret
@@ -28,10 +28,11 @@ func (c *Client) aquirePacketID() uint16 {
 
 func (c *Client) recvRoutine() {
 	for {
-		packet, err := packets.Recv(c.transport)
+		packet, err := c.io.Recv()
 		if err == io.EOF {
 			return
 		} else if err != nil {
+			log.Error(err)
 			c.errChan <- err
 			return
 		}
@@ -48,7 +49,7 @@ func (c *Client) recvRoutine() {
 			id := pVal.FieldByName("PacketIdentifier")
 			packetID := id.Interface().(uint16)
 			// Verify that the channel is present
-			if c, ok := c.ackChan[packetID]; ok {
+			if c, ok := c.ackChan.Get(packetID); ok {
 				// Non-blocking send on channel
 				//  - May receive multiple copies.
 				select {
@@ -90,51 +91,50 @@ func (c *Client) recvRoutine() {
 					Version:          c.version,
 					PacketIdentifier: pub.PacketIdentifier,
 				}
-				_, err := packets.Send(c.transport, pubAck)
+				err := c.io.Send(pubAck)
 				if err != nil {
 					log.Error(err)
 					c.errChan <- err
 				}
-				delete(c.pendingPackets, pub.PacketIdentifier)
+				c.pendingPackets.Del(pub.PacketIdentifier)
 
 			case mqtt.QoS2:
 				// Send PubRec and update pending packet.
+				packetID := pub.PacketIdentifier
 				pubRec := &packets.PubRec{
 					Version:          c.version,
-					PacketIdentifier: pub.PacketIdentifier,
+					PacketIdentifier: packetID,
 				}
-				_, err := packets.Send(c.transport, pubRec)
+				err := c.io.Send(pubRec)
 				if err != nil {
 					log.Error(err)
 					c.errChan <- err
 					return
 				}
-				c.pendingPackets[pub.
-					PacketIdentifier] = &packets.PubRel{
-					Version:          c.version,
-					PacketIdentifier: pub.PacketIdentifier,
-				}
+				c.pendingPackets.Set(
+					pub.PacketIdentifier,
+					pubRec)
 			}
 
 		case *packets.PubAck:
 			// Delete pending packet; publish completed
 			pubAck := packet.(*packets.PubAck)
-			delete(c.pendingPackets, pubAck.PacketIdentifier)
+			c.pendingPackets.Del(pubAck.PacketIdentifier)
 
 		case *packets.PubComp:
 			// Delete pending packet; publish completed
 			pubComp := packet.(*packets.PubComp)
-			delete(c.pendingPackets, pubComp.PacketIdentifier)
+			c.pendingPackets.Del(pubComp.PacketIdentifier)
 
 		case *packets.PubRel:
 			// Discard cached packet and send publish complete
 			pub := packet.(*packets.PubRel)
-			delete(c.pendingPackets, pub.PacketIdentifier)
+			c.pendingPackets.Del(pub.PacketIdentifier)
 			pubComp := &packets.PubComp{
 				Version:          c.version,
 				PacketIdentifier: pub.PacketIdentifier,
 			}
-			_, err := packets.Send(c.transport, pubComp)
+			err := c.io.Send(pubComp)
 			if err != nil {
 				log.Error(err)
 				c.errChan <- err
@@ -144,20 +144,22 @@ func (c *Client) recvRoutine() {
 		case *packets.PubRec:
 			// Update pending packets and send PubRel
 			pubRec := packet.(*packets.PubRec)
-			if ackChan, ok := c.ackChan[pubRec.
-				PacketIdentifier]; ok {
+			if ackChan, ok := c.ackChan.
+				Get(pubRec.PacketIdentifier); ok {
 				select {
 				case ackChan <- pubRec:
 				default:
 					log.Warn("Packet discarded: PUBREC")
 				}
+			} else {
+				log.Error("[internal] ACK chan not present")
 			}
 			pubRel := &packets.PubRel{
 				Version:          c.version,
 				PacketIdentifier: pubRec.PacketIdentifier,
 			}
-			c.pendingPackets[pubRec.PacketIdentifier] = pubRel
-			_, err := packets.Send(c.transport, pubRel)
+			c.pendingPackets.Set(pubRec.PacketIdentifier, pubRel)
+			err := c.io.Send(pubRel)
 			if err != nil {
 				log.Error(err)
 				c.errChan <- err

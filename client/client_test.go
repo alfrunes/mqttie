@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TODO: Implement PacketIO interface and create a mock for it; it's too complex mocking conn (+ already covered by packet tests).
+
 var (
 	True       = true
 	False      = false
@@ -285,6 +287,156 @@ func TestPing(t *testing.T) {
 					pingErr.Error())
 			}
 			conn.Close()
+		})
+	}
+}
+
+func TestPublish(t *testing.T) {
+	testCases := []struct {
+		Name string
+
+		Version mqtt.Version
+
+		ReadErr  error
+		WriteErr error
+		PubErr   error
+
+		Topic   mqtt.Topic
+		Payload []byte
+		Retain  bool
+	}{
+		{
+			Name: "Sucessful publish QoS0",
+
+			Version: mqtt.MQTTv311,
+			Topic: mqtt.Topic{
+				Name: "foo/bar",
+				QoS:  mqtt.QoS0,
+			},
+			Payload: []byte("foobar"),
+		},
+		{
+			Name: "Sucessful publish QoS1",
+
+			Version: mqtt.MQTTv311,
+			Topic: mqtt.Topic{
+				Name: "foo/bar",
+				QoS:  mqtt.QoS1,
+			},
+			Payload: []byte("foobar"),
+		},
+		{
+			Name: "Sucessful publish QoS2",
+
+			Version: mqtt.MQTTv311,
+			Topic: mqtt.Topic{
+				Name: "foo/bar",
+				QoS:  mqtt.QoS2,
+			},
+			Retain:  true,
+			Payload: []byte("foobar"),
+		},
+		{
+			Name: "Error illegal QoS",
+
+			PubErr:  mqtt.ErrIllegalQoS,
+			Version: mqtt.MQTTv311,
+			Topic: mqtt.Topic{
+				Name: "foo/bar",
+				QoS:  mqtt.QoS(250),
+			},
+			Retain:  true,
+			Payload: []byte("foobar"),
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.Name, func(t *testing.T) {
+			conn := NewFakeConn(2)
+			defer conn.Close()
+			client := NewClient(conn)
+			pubOpts := NewPublishOptions()
+			if testCase.Retain {
+				pubOpts.SetRetain(true)
+			} else {
+				pubOpts = nil
+			}
+			conn.On("Close").Return(nil)
+
+			switch testCase.Topic.QoS {
+			case mqtt.QoS0:
+				conn.On("Write", mock.Anything).
+					Return(0, nil)
+				if testCase.ReadErr != nil {
+					conn.On("Read", mock.Anything).
+						Return(0, testCase.ReadErr)
+				} else {
+					conn.On("Read", mock.Anything).
+						Return(0, nil).
+						Times(4)
+				}
+
+			case mqtt.QoS1:
+				pubAck := &packets.PubAck{
+					Version: testCase.Version,
+					PacketIdentifier: uint16(
+						client.packetIDCounter + 1),
+				}
+				b, _ := pubAck.MarshalBinary()
+				conn.ReadChan <- b
+				if testCase.ReadErr != nil {
+					conn.On("Read", mock.Anything).
+						Return(0, testCase.ReadErr)
+				} else {
+					conn.On("Read", mock.Anything).
+						Return(0, nil).
+						Times(4)
+				}
+				if testCase.WriteErr != nil {
+					conn.On("Write", mock.Anything).
+						Return(0, testCase.WriteErr)
+				} else {
+					conn.On("Write", mock.Anything).
+						Return(0, nil).
+						Twice()
+				}
+
+			case mqtt.QoS2:
+				pubRec := &packets.PubRec{
+					Version: testCase.Version,
+					PacketIdentifier: uint16(
+						client.packetIDCounter + 1),
+				}
+				b, _ := pubRec.MarshalBinary()
+				conn.ReadChan <- b
+
+				if testCase.ReadErr != nil {
+					conn.On("Read", mock.Anything).
+						Return(0, testCase.ReadErr)
+				} else {
+					conn.On("Read", mock.Anything).
+						Return(0, nil).
+						Times(6)
+				}
+				if testCase.WriteErr != nil {
+					conn.On("Write", mock.Anything).
+						Return(0, testCase.WriteErr)
+				} else {
+					conn.On("Write", mock.Anything).
+						Return(0, nil).
+						Times(3)
+				}
+			}
+			err := client.Publish(
+				testCase.Topic,
+				testCase.Payload,
+				pubOpts,
+			)
+			if testCase.PubErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err,
+					testCase.PubErr.Error())
+			}
 		})
 	}
 }

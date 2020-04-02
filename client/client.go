@@ -26,13 +26,12 @@ type Client struct {
 	ClientID string
 	version  mqtt.Version
 
-	pendingPacketIDs []uint16
-	pendingPackets   map[uint16]mqtt.Packet
-	packetIDCounter  uint32
+	pendingPackets  *packetMap
+	packetIDCounter uint32
 
 	expiresAt time.Time
 
-	transport net.Conn
+	io packets.IO
 
 	// errChan is an internal error channel detecting asyncronous fatal
 	// errors.
@@ -46,7 +45,7 @@ type Client struct {
 	// ackChan is used to pass SubAck and UnsubAck responses to the caller
 	// goroutine. The callee is responsible for setting up a channel
 	// prior to sending the Subscribe/Unsubscribe packets.
-	ackChan map[uint16]chan mqtt.Packet
+	ackChan *packetChanMap
 	connAck chan *packets.ConnAck
 }
 
@@ -57,15 +56,14 @@ type Client struct {
 // connection will lead to the client throwing an error.
 func NewClient(connection net.Conn, options ...*ClientOptions) (client *Client) {
 	var r [2]byte
+	var timeout time.Duration
 	id := uuid.NewV4()
 	client = &Client{
 		ClientID: id.String(),
 		version:  mqtt.MQTTv311,
 
-		transport: connection,
-
-		pendingPackets: make(map[uint16]mqtt.Packet),
-		ackChan:        make(map[uint16]chan mqtt.Packet),
+		pendingPackets: newPacketMap(),
+		ackChan:        newPacketChanMap(),
 		errChan:        make(chan error, 1),
 		pingResp:       make(chan *packets.PingResp, 1),
 		connAck:        make(chan *packets.ConnAck, 1),
@@ -80,7 +78,11 @@ func NewClient(connection net.Conn, options ...*ClientOptions) (client *Client) 
 		if opt.ClientID != nil {
 			client.ClientID = *opt.ClientID
 		}
+		if opt.Timeout != nil {
+			timeout = *opt.Timeout
+		}
 	}
+	client.io = packets.NewPacketIO(connection, client.version, timeout)
 	rand.Read(r[:])
 	defer func() {
 		// In case binary package panics (should never occur)
@@ -122,7 +124,7 @@ func (c *Client) Connect(options ...*ConnectOptions) error {
 		c.expiresAt = time.Now().
 			Add(time.Second * time.Duration(conn.KeepAlive))
 	}
-	_, err := packets.Send(c.transport, conn)
+	err := c.io.Send(conn)
 	if err != nil {
 		return err
 	}
@@ -155,12 +157,12 @@ func (c *Client) Disconnect() (err error) {
 		Version: c.version,
 	}
 	defer func() {
-		errClose := c.transport.Close()
+		errClose := c.io.Close()
 		if err == nil {
 			err = errClose
 		}
 	}()
-	_, err = packets.Send(c.transport, dc)
+	err = c.io.Send(dc)
 	return
 }
 
@@ -169,7 +171,7 @@ func (c *Client) Ping() error {
 	p := &packets.PingReq{
 		Version: c.version,
 	}
-	_, err := packets.Send(c.transport, p)
+	err := c.io.Send(p)
 	if err != nil {
 		return err
 	}
@@ -186,7 +188,11 @@ func (c *Client) Ping() error {
 }
 
 // Publish publishes a new packet to the specified topic.
-func (c *Client) Publish(topic mqtt.Topic, payload []byte) error {
+func (c *Client) Publish(
+	topic mqtt.Topic,
+	payload []byte,
+	options ...*PublishOptions,
+) error {
 	// Reserve packet identifier
 	packetID := c.aquirePacketID()
 	pub := &packets.Publish{
@@ -196,24 +202,33 @@ func (c *Client) Publish(topic mqtt.Topic, payload []byte) error {
 		Payload: payload,
 	}
 
+	for _, opts := range options {
+		if opts == nil {
+			continue
+		}
+		if *opts.Retain {
+			pub.Retain = *opts.Retain
+		}
+	}
+
 	switch topic.QoS {
 	case mqtt.QoS0:
 		// Nothing to do here.
 	case mqtt.QoS2:
-		c.ackChan[packetID] = make(chan mqtt.Packet, 1)
-		defer func() { delete(c.ackChan, packetID) }()
+		c.ackChan.New(packetID)
+		defer c.ackChan.Del(packetID)
 		fallthrough
 	case mqtt.QoS1:
 		pub.PacketIdentifier = packetID
-		c.pendingPackets[packetID] = pub
-		c.pendingPacketIDs = append(c.pendingPacketIDs, packetID)
+		c.pendingPackets.Add(packetID, pub)
 	default:
 		return mqtt.ErrIllegalQoS
 	}
 
-	_, err := packets.Send(c.transport, pub)
-	if err != nil && topic.QoS == mqtt.QoS2 {
-		<-c.ackChan[packetID]
+	err := c.io.Send(pub)
+	if err == nil && topic.QoS == mqtt.QoS2 {
+		ackChan, _ := c.ackChan.Get(packetID)
+		<-ackChan
 	}
 	return err
 }
@@ -235,9 +250,8 @@ func (c *Client) Subscribe(
 	// Reserve packet id
 	packetID := c.aquirePacketID()
 	// Setup ack channel
-	ackChan := make(chan mqtt.Packet)
-	c.ackChan[packetID] = ackChan
-	defer func() { delete(c.ackChan, packetID) }()
+	c.ackChan.New(packetID)
+	defer c.ackChan.Del(packetID)
 	for i, topic := range topics {
 		// Reserve receive channels
 		c.subscribeChans.add(topic.Name, topicChans[i])
@@ -248,10 +262,11 @@ func (c *Client) Subscribe(
 		PacketIdentifier: packetID,
 		Topics:           topics,
 	}
-	_, err := packets.Send(c.transport, sub)
+	err := c.io.Send(sub)
 	if err != nil {
 		return nil, err
 	}
+	ackChan, _ := c.ackChan.Get(packetID)
 	select {
 	case ack := <-ackChan:
 		if subAck, ok := ack.(*packets.SubAck); ok {
@@ -287,9 +302,12 @@ func (c *Client) Unsubscribe(topicNames ...string) error {
 		Topics:           topicNames,
 		PacketIdentifier: packetID,
 	}
-	c.ackChan[packetID] = make(chan mqtt.Packet, 1)
-	_, err := packets.Send(c.transport, p)
-	<-c.ackChan[packetID]
-	delete(c.ackChan, packetID)
+	c.ackChan.New(packetID)
+	err := c.io.Send(p)
+	if err == nil {
+		ackChan, _ := c.ackChan.Get(packetID)
+		<-ackChan
+	}
+	c.ackChan.Del(packetID)
 	return err
 }

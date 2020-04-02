@@ -2,6 +2,8 @@ package client
 
 import (
 	"strings"
+
+	"github.com/alfrunes/mqttie/mqtt"
 )
 
 type topicChan struct {
@@ -85,4 +87,80 @@ func (t *topicChan) remove(topic string) {
 		root = parent
 	}
 	root.Child = nil
+}
+
+type packetMap struct {
+	packets map[uint16]mqtt.Packet
+	mutex   chan struct{}
+}
+
+func newPacketMap() *packetMap {
+	return &packetMap{
+		packets: make(map[uint16]mqtt.Packet),
+		mutex:   make(chan struct{}, 1),
+	}
+}
+
+func (p *packetMap) Add(packetID uint16, packet mqtt.Packet) bool {
+	p.mutex <- struct{}{}
+	defer func() { <-p.mutex }()
+	if _, ok := p.packets[packetID]; ok {
+		return false
+	}
+	p.packets[packetID] = packet
+	return true
+}
+
+func (p *packetMap) Set(packetID uint16, packet mqtt.Packet) {
+	p.mutex <- struct{}{}
+	p.packets[packetID] = packet
+	<-p.mutex
+}
+
+func (p *packetMap) Get(packetID uint16) (mqtt.Packet, bool) {
+	p.mutex <- struct{}{}
+	defer func() { <-p.mutex }()
+	packet, ok := p.packets[packetID]
+	return packet, ok
+}
+
+func (p *packetMap) Del(packetID uint16) {
+	p.mutex <- struct{}{}
+	delete(p.packets, packetID)
+	<-p.mutex
+}
+
+type packetChanMap struct {
+	chans map[uint16]chan mqtt.Packet
+	mutex chan struct{}
+}
+
+func newPacketChanMap() *packetChanMap {
+	return &packetChanMap{
+		chans: make(map[uint16]chan mqtt.Packet),
+		mutex: make(chan struct{}, 1),
+	}
+}
+
+func (p *packetChanMap) New(packetID uint16) bool {
+	p.mutex <- struct{}{}
+	defer func() { <-p.mutex }()
+	if _, ok := p.chans[packetID]; ok {
+		return false
+	}
+	p.chans[packetID] = make(chan mqtt.Packet, 1)
+	return true
+}
+
+func (p *packetChanMap) Get(packetID uint16) (chan mqtt.Packet, bool) {
+	p.mutex <- struct{}{}
+	defer func() { <-p.mutex }()
+	c, ok := p.chans[packetID]
+	return c, ok
+}
+
+func (p *packetChanMap) Del(packetID uint16) {
+	p.mutex <- struct{}{}
+	delete(p.chans, packetID)
+	<-p.mutex
 }
