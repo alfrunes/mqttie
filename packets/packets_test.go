@@ -3,315 +3,304 @@ package packets
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/alfrunes/mqttie/mqtt"
 	"github.com/stretchr/testify/assert"
 )
 
-type ErrWriter struct {
-	Err error
-}
-
-func (e *ErrWriter) Write(b []byte) (int, error) {
-	if e.Err == nil {
-		e.Err = io.ErrShortWrite
-	}
-	return -1, e.Err
-}
-
-type ErrReader struct {
-	Buf []byte
-	i   int
-	Err error
-}
-
-func (e *ErrReader) Read(b []byte) (int, error) {
-	if e.Buf != nil {
-		if e.i < len(e.Buf) {
-			i := copy(b, e.Buf[e.i:])
-			e.i += i
-			return i, nil
-		}
-	}
-	if e.Err == nil {
-		e.Err = io.ErrShortBuffer
-	}
-	return -1, e.Err
-}
-
 func TestConnect(t *testing.T) {
 	buf := &bytes.Buffer{}
-	conn := &Connect{
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
+	connect := &Connect{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, conn)
+	err := bufIO.Send(connect)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
-	if assert.IsType(t, conn, p) {
-		assert.Equal(t, conn, p)
-	}
-	// TODO Test a fully configured encode decode
-	// TODO all the error cases
-	conn.ClientID = "foobar"
-	conn.CleanSession = true
-	conn.KeepAlive = 123
-	conn.Username = "foo@bar.com"
-	conn.Password = "foobar"
-	conn.WillMessage = []byte("foo")
-	conn.WillRetain = true
-	conn.WillTopic = mqtt.Topic{
+	p, err := bufIO.Recv()
+	assert.Equal(t, connect, p)
+	connect.ClientID = "foobar"
+	connect.CleanSession = true
+	connect.KeepAlive = 123
+	connect.Username = "foo@bar.com"
+	connect.Password = "foobar"
+	connect.WillMessage = []byte("foo")
+	connect.WillRetain = true
+	connect.WillTopic = mqtt.Topic{
 		Name: "foo",
 		QoS:  mqtt.QoS1,
 	}
 	buf.Reset()
-	_, err = Send(buf, conn)
+	err = bufIO.Send(connect)
 	assert.NoError(t, err)
-	p, err = Recv(buf)
+	p, err = bufIO.Recv()
 	assert.NoError(t, err)
-	if assert.IsType(t, conn, p) {
-		assert.Equal(t, conn, p)
+	if assert.IsType(t, connect, p) {
+		assert.Equal(t, connect, p)
 	}
 
 	// Illegal received mesage
-	r := &ErrReader{}
-	_, err = conn.ReadFrom(r)
-	assert.Error(t, err)
-	r.Buf = []byte{3, 1, 2, 3}
-	_, err = conn.ReadFrom(r)
+	buf.Write([]byte{cmdConnect, 3, 1, 2, 3})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
-	r.i = 0
-	r.Buf = []byte{13}
-	_, err = conn.ReadFrom(r)
+	buf.Reset()
+	buf.Write([]byte{cmdConnect, 13})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{13, 1, 2, 'M', 'Q', 'T', 'T', 7, 8, 9, 10}
-	_, err = conn.ReadFrom(r)
+	buf.Reset()
+	buf.Write([]byte{cmdConnect, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{13, 1, 2, 'P', 'Q', 'T', 'T', 7, 8, 9, 10}
-	_, err = conn.ReadFrom(r)
+	buf.Reset()
+	buf.Write([]byte{cmdConnect, 13, 1, 2, 'M', 'Q', 'T', 'T', 7, 8, 9, 10})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
+	buf.Reset()
+	buf.Write([]byte{cmdConnect, 13, 1, 2, 'P', 'Q', 'T', 'T', 7, 8, 9, 10})
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+	buf.Reset()
 
 	// Truncate buffer to cause io errors
-	b, err := conn.MarshalBinary()
+	b, err := connect.MarshalBinary()
 	buf.Write(b)
 	// Error reading password
 	buf.Truncate(len(b) - 10)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	// Error reading username
 	buf.Write(b)
 	buf.Truncate(len(b) - 20)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Error reading will message
 	buf.Write(b)
 	buf.Truncate(len(b) - 25)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Error reading will message length
 	buf.Write(b)
 	buf.Truncate(len(b) - 28)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Error reading will topic
 	buf.Write(b)
 	buf.Truncate(len(b) - 30)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Error reading will client id
 	buf.Write(b)
 	buf.Truncate(len(b) - 35)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Shorten remaining length
 	// Error at client id
 	b[1] = 15
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	// Error at will topic
 	b[1] = 20
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	// Error at will message length
 	b[1] = 23
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	// Error at will message
 	b[1] = 25
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	// Error at username
 	b[1] = 30
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	// Error at username
 	b[1] = 42
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 
 	b[9] &= ^ConnectFlagWill
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Invalid QoS value
-	conn.WillTopic.QoS = mqtt.QoS(3)
-	_, err = conn.MarshalBinary()
+	connect.WillTopic.QoS = mqtt.QoS(3)
+	_, err = connect.MarshalBinary()
 	assert.Error(t, err)
 	buf.Reset()
-	conn.WillTopic.QoS = mqtt.QoS2
+	connect.WillTopic.QoS = mqtt.QoS2
 	// Illegal will message
-	conn.WillMessage = make([]byte, int(^uint16(0))+1)
-	_, err = Send(buf, conn)
+	connect.WillMessage = make([]byte, int(^uint16(0))+1)
+	err = bufIO.Send(connect)
 	assert.Error(t, err)
 }
 
 func TestConnAck(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(1))
 	connAck := &ConnAck{
 		Version:        mqtt.MQTTv311,
 		SessionPresent: true,
 	}
-	_, err := Send(buf, connAck)
+	err := bufIO.Send(connAck)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, connAck, p) {
-		rsp := p.(*ConnAck)
-		assert.Equal(t, connAck, rsp)
+		assert.Equal(t, connAck, p)
 	}
 
 	connAck.SessionPresent = false
 	b, _ := connAck.MarshalBinary()
 	b[2] |= 0x0F
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 	buf.Reset()
 	b[1] = 4
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
 	buf.Reset()
 	b[1] = 0
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
 }
 
 func TestDisconnect(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(1))
 	d := &Disconnect{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, d)
+	err := bufIO.Send(d)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	assert.IsType(t, d, p)
 	b, _ := d.MarshalBinary()
 	b[1] = 2
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
+	err = bufIO.Close()
+	assert.NoError(t, err)
 }
 
 func TestPing(t *testing.T) {
-	var buf *bytes.Buffer = &bytes.Buffer{}
+	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	ping := &PingReq{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, ping)
+	err := bufIO.Send(ping)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, p, ping) {
 		pingRet := p.(*PingReq)
 		assert.Equal(t, pingRet, ping)
 	}
 
-	// Test broken writer
-	w := &ErrWriter{}
-	_, err = Send(w, ping)
-	assert.Error(t, err)
-
-	// Test broken reader
-	r := &ErrReader{}
-	r.Buf = []byte{cmdPingReq}
-	_, err = Recv(r)
-	assert.Error(t, err)
-
 	// Test decode malformed packet
 	raw, err := ping.MarshalBinary()
 	assert.NoError(t, err)
 	raw[1] = 5
 	buf.Write(raw)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
+
+	buf.Reset()
+	buf.Write([]byte{cmdPingReq})
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+
+	// Test broken writer
+	conn.writeErr = fmt.Errorf("foo")
+	err = bufIO.Send(ping)
+	assert.Error(t, err)
+
+	// Test broken reader
+	conn.readErr = fmt.Errorf("bar")
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
 }
 
 func TestPingResp(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	pingResp := &PingResp{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, pingResp)
+	err := bufIO.Send(pingResp)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, p, pingResp) {
-		rsp := p.(*PingResp)
-		assert.Equal(t, pingResp, rsp)
+		assert.Equal(t, pingResp, p)
 	}
-
-	// Test broken writer
-	w := &ErrWriter{}
-	_, err = Send(w, pingResp)
-	assert.Error(t, err)
-
-	// Test broken reader
-	r := &ErrReader{}
-	r.Buf = []byte{cmdPingResp}
-	_, err = Recv(r)
-	assert.Error(t, err)
 
 	b, err := pingResp.MarshalBinary()
 	assert.NoError(t, err)
 	b[1] = 5
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
+	buf.Reset()
+	buf.Write([]byte{cmdPingResp})
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+
+	// Test broken writer
+	conn.writeErr = fmt.Errorf("foo")
+	err = bufIO.Send(pingResp)
+	assert.Error(t, err)
+
+	// Test broken reader
+	conn.readErr = fmt.Errorf("foo")
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+
 }
 
 func TestPublish(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	pub := &Publish{
 		Version: mqtt.MQTTv311,
 		Topic: mqtt.Topic{
@@ -320,9 +309,9 @@ func TestPublish(t *testing.T) {
 		},
 		Payload: []byte("baz"),
 	}
-	_, err := Send(buf, pub)
+	err := bufIO.Send(pub)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, pub, p) {
 		assert.Equal(t, pub, p)
@@ -331,9 +320,9 @@ func TestPublish(t *testing.T) {
 	pub.Duplicate = true
 	pub.Topic.QoS = mqtt.QoS2
 	pub.Retain = true
-	_, err = Send(buf, pub)
+	err = bufIO.Send(pub)
 	assert.NoError(t, err)
-	p, err = Recv(buf)
+	p, err = bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, pub, p) {
 		assert.Equal(t, pub, p)
@@ -342,148 +331,150 @@ func TestPublish(t *testing.T) {
 	b, _ := pub.MarshalBinary()
 	buf.Write(b)
 	buf.Truncate(1)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	buf.Reset()
 	buf.Write(b)
 	buf.Truncate(2)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	buf.Reset()
 	buf.Write(b)
 	buf.Truncate(len(b) - len(pub.Payload) - 2)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	buf.Reset()
 	b[1] = byte(len(pub.Topic.Name))
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	buf.Reset()
 	b[1] = byte(len(pub.Topic.Name) + 3)
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 }
 
 func TestPubAck(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	pubAck := &PubAck{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, pubAck)
+	err := bufIO.Send(pubAck)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	assert.Equal(t, pubAck, p)
 
-	r := &ErrReader{}
-	_, err = pubAck.ReadFrom(r)
+	buf.Write([]byte{cmdPubAck})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.Buf = []byte{cmdPubAck, 1}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubAck, 1})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
-	r.i = 0
-	r.Buf = []byte{cmdPubAck, 3}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubAck, 3})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
 
-	r.i = 0
-	r.Buf = []byte{2}
-	_, err = pubAck.ReadFrom(r)
+	buf.Write([]byte{cmdPubAck, 2})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 }
 
 func TestPubRec(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	pubRec := &PubRec{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, pubRec)
+	err := bufIO.Send(pubRec)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	assert.Equal(t, pubRec, p)
 
-	r := &ErrReader{}
-	_, err = pubRec.ReadFrom(r)
+	buf.Write([]byte{cmdPubRec})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.Buf = []byte{cmdPubRec, 1}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubRec, 1})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
-	r.i = 0
-	r.Buf = []byte{cmdPubRec, 3}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubRec, 3})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
 
-	r.i = 0
-	r.Buf = []byte{2}
-	_, err = pubRec.ReadFrom(r)
+	buf.Write([]byte{cmdPubRec, 2})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 }
 
 func TestPubRel(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	pubRel := &PubRel{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, pubRel)
+	err := bufIO.Send(pubRel)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	assert.Equal(t, pubRel, p)
 
-	r := &ErrReader{}
-	_, err = pubRel.ReadFrom(r)
+	buf.Write([]byte{cmdPubRel})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.Buf = []byte{cmdPubRel, 1}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubRel, 1})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
-	r.i = 0
-	r.Buf = []byte{cmdPubRel, 3}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubRel, 3})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
 
-	r.i = 0
-	r.Buf = []byte{2}
-	_, err = pubRel.ReadFrom(r)
+	buf.Write([]byte{cmdPubRel, 2})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 }
 
 func TestPubComp(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	pubComp := &PubComp{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, pubComp)
+	err := bufIO.Send(pubComp)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	assert.Equal(t, pubComp, p)
 
-	r := &ErrReader{}
-	_, err = pubComp.ReadFrom(r)
+	buf.Write([]byte{cmdPubComp})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.Buf = []byte{cmdPubComp, 1}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubComp, 1})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
-	r.i = 0
-	r.Buf = []byte{cmdPubComp, 3}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdPubComp, 3})
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
 
-	r.i = 0
-	r.Buf = []byte{2}
-	_, err = pubComp.ReadFrom(r)
+	buf.Write([]byte{cmdPubComp, 2})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 }
 
 func TestSubscribe(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	sub := &Subscribe{
 		Version: mqtt.MQTTv311,
 		Topics: []mqtt.Topic{
@@ -502,47 +493,45 @@ func TestSubscribe(t *testing.T) {
 		},
 	}
 
-	_, err := Send(buf, sub)
+	err := bufIO.Send(sub)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, p, sub) {
-		rsp := p.(*Subscribe)
-		assert.Equal(t, sub, rsp)
+		assert.Equal(t, sub, p)
 	}
 
-	// Test broken writer
-	w := &ErrWriter{}
-	_, err = Send(w, sub)
+	buf.Write([]byte{cmdSubscribe, 2, 0, 1})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r := &ErrReader{}
-	_, err = Recv(r)
-	r.Buf = []byte{cmdSubscribe, 2, 0, 1}
-	_, err = Recv(r)
+	buf.Reset()
+	buf.Write([]byte{cmdSubscribe, 0})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{cmdSubscribe, 0}
-	_, err = Recv(r)
+	buf.Reset()
+	buf.Write([]byte{cmdSubscribe, 6, 0, 0, 0, 1, 'f'})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{cmdSubscribe, 6, 0, 0, 0, 1, 'f'}
-	_, err = Recv(r)
+	buf.Reset()
+	buf.Write([]byte{cmdSubscribe, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Test malformed packet length
+	buf.Reset()
 	b, err := sub.MarshalBinary()
 	assert.NoError(t, err)
 	b[1] = 5
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
 
-	buf = &bytes.Buffer{}
+	buf.Reset()
 	b, err = sub.MarshalBinary()
 	assert.NoError(t, err)
 	b[1] = 127
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, io.EOF.Error())
 
 	// Remaining length field too high
@@ -551,12 +540,19 @@ func TestSubscribe(t *testing.T) {
 	assert.NoError(t, err)
 	binary.PutUvarint(b[1:], ^uint64(0))
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+
+	// Test broken writer
+	conn.writeErr = fmt.Errorf("foo")
+	err = bufIO.Send(sub)
 	assert.Error(t, err)
 }
 
 func TestSubAck(t *testing.T) {
-	var buf *bytes.Buffer = &bytes.Buffer{}
+	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	subAck := &SubAck{
 		Version: mqtt.MQTTv311,
 		ReturnCodes: []uint8{
@@ -566,143 +562,136 @@ func TestSubAck(t *testing.T) {
 			128,
 		},
 	}
-	_, err := Send(buf, subAck)
+	err := bufIO.Send(subAck)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, p, subAck) {
-		subAckRet := p.(*SubAck)
-		assert.Equal(t, subAck, subAckRet)
+		assert.Equal(t, subAck, p)
 	}
 
-	// Test broken writer
-	w := &ErrWriter{}
-	_, err = Send(w, subAck)
-	assert.Error(t, err)
-
 	// Test broken reader
-	r := &ErrReader{}
-	r.Buf = []byte{cmdSubAck}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdSubAck})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{cmdSubAck, 2, 0, 1}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdSubAck, 2, 0, 1})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{cmdSubAck, 0}
-	_, err = Recv(r)
+	buf.Reset()
+	buf.Write([]byte{cmdSubAck, 0})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Test decode malformed packet
 	raw, err := subAck.MarshalBinary()
 	assert.NoError(t, err)
 	raw[1] = 0
+	buf.Reset()
 	buf.Write(raw)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
 	raw[1] = 1
-	buf = &bytes.Buffer{}
+	buf.Reset()
 	buf.Write(raw)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
+
+	// Test broken writer
+	conn.writeErr = fmt.Errorf("foo")
+	err = bufIO.Send(subAck)
+	assert.Error(t, err)
+
 }
 
 func TestUnsubAck(t *testing.T) {
-	var buf *bytes.Buffer = &bytes.Buffer{}
+	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	uAck := &UnsubAck{
 		Version: mqtt.MQTTv311,
 	}
-	_, err := Send(buf, uAck)
+	err := bufIO.Send(uAck)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, p, uAck) {
-		uAckRet := p.(*UnsubAck)
-		assert.Equal(t, uAck, uAckRet)
+		assert.Equal(t, uAck, p)
 	}
 
-	// Test broken writer
-	w := &ErrWriter{}
-	_, err = Send(w, uAck)
-	assert.Error(t, err)
-
 	// Test broken reader
-	r := &ErrReader{}
-	_, err = Recv(r)
-	r.Buf = []byte{cmdUnsubAck, 2}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdUnsubAck, 2})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	buf = &bytes.Buffer{}
 
 	// Test decode malformed packet length
+	buf.Reset()
 	raw, err := uAck.MarshalBinary()
 	assert.NoError(t, err)
 	raw[1] = 5
 	buf.Write(raw)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketLong.Error())
 
-	buf = &bytes.Buffer{}
+	buf.Reset()
 	raw[1] = 0
 	buf.Write(raw)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
 
+	buf.Reset()
 	raw = append(raw, make([]byte, 10)...)
 	binary.PutUvarint(raw[1:], uint64(^uint32(0)))
-	buf = &bytes.Buffer{}
 	buf.Write(raw)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+
+	// Test broken writer
+	conn.writeErr = fmt.Errorf("foo")
+	err = bufIO.Send(uAck)
 	assert.Error(t, err)
 }
 
 func TestUnsubscribe(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	sub := &Unsubscribe{
 		Version: mqtt.MQTTv311,
 		Topics:  []string{"foo", "foo/bar", "foo/bar/baz"},
 	}
 
-	_, err := Send(buf, sub)
+	err := bufIO.Send(sub)
 	assert.NoError(t, err)
-	p, err := Recv(buf)
+	p, err := bufIO.Recv()
 	assert.NoError(t, err)
 	if assert.IsType(t, p, sub) {
-		rsp := p.(*Unsubscribe)
-		assert.Equal(t, sub, rsp)
+		assert.Equal(t, sub, p)
 	}
 
-	// Test broken writer
-	w := &ErrWriter{}
-	_, err = Send(w, sub)
-	assert.Error(t, err)
-
 	// Test broken reader
-	r := &ErrReader{}
-	_, err = Recv(r)
-	r.Buf = []byte{cmdUnsubscribe, 2, 0, 1}
-	_, err = Recv(r)
+	buf.Write([]byte{cmdUnsubscribe, 2, 0, 1})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
-	r.i = 0
-	r.Buf = []byte{cmdUnsubscribe, 0}
-	_, err = Recv(r)
+	buf.Reset()
+	buf.Write([]byte{cmdUnsubscribe, 0})
+	_, err = bufIO.Recv()
 	assert.Error(t, err)
 
 	// Test malformed packet length
+	buf.Reset()
 	b, err := sub.MarshalBinary()
 	assert.NoError(t, err)
 	b[1] = 5
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, mqtt.ErrPacketShort.Error())
 
-	buf = &bytes.Buffer{}
+	buf.Reset()
 	b, err = sub.MarshalBinary()
 	assert.NoError(t, err)
 	b[1] = 127
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
 	assert.EqualError(t, err, io.EOF.Error())
 
 	// Remaining length field too high
@@ -711,13 +700,20 @@ func TestUnsubscribe(t *testing.T) {
 	assert.NoError(t, err)
 	binary.PutUvarint(b[1:], ^uint64(0))
 	buf.Write(b)
-	_, err = Recv(buf)
+	_, err = bufIO.Recv()
+	assert.Error(t, err)
+
+	// Test broken writer
+	conn.writeErr = fmt.Errorf("foo")
+	err = bufIO.Send(sub)
 	assert.Error(t, err)
 }
 
 func TestIllegalCommand(t *testing.T) {
 	buf := &bytes.Buffer{}
+	conn := NewBufferConn(buf)
+	bufIO := NewPacketIO(conn, mqtt.MQTTv311, time.Duration(0))
 	buf.Write([]byte{0})
-	_, err := Recv(buf)
+	_, err := bufIO.Recv()
 	assert.Error(t, err)
 }
