@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/alfrunes/mqttie/mqtt"
-	"github.com/alfrunes/mqttie/util"
+	"github.com/alfrunes/mqttie/x/util"
 )
 
 const (

@@ -66,7 +66,6 @@ func (s subMap) Del(topic string) {
 			m.Del(topic[i+1:])
 		}
 	}
-	return
 }
 
 type packetMap struct {

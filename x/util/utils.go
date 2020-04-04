@@ -59,7 +59,7 @@ func EncodeUTF8(b []byte, str string) (n int, err error) {
 func WriteUTF8(w io.Writer, str string) (n int, err error) {
 	var buf [2]byte
 	l := len(str)
-	if l = len(str); l > 0xFFFFFFFF {
+	if l > 0xFFFFFFFF {
 		return 0, fmt.Errorf("UTF-8 string too long")
 	}
 	binary.BigEndian.PutUint16(buf[:], uint16(l))

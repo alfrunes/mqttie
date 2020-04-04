@@ -11,8 +11,6 @@ import (
 )
 
 var (
-	True       = true
-	False      = false
 	TestTopics = []mqtt.Topic{
 		mqtt.Topic{
 			Name: "foo/qos0",
@@ -593,7 +591,7 @@ func TestSubscribe(t *testing.T) {
 				if c := client.subs.Get(
 					pub.Topic.Name,
 				); c != nil && cap(c) > 0 {
-					b = <-subChan
+					<-subChan
 				}
 				if pub.QoS > mqtt.QoS0 {
 					<-finished

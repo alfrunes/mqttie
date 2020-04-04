@@ -7,7 +7,7 @@ import (
 	"io"
 
 	"github.com/alfrunes/mqttie/mqtt"
-	"github.com/alfrunes/mqttie/util"
+	"github.com/alfrunes/mqttie/x/util"
 	"github.com/satori/go.uuid"
 )
 
@@ -96,6 +96,9 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	}
 	length += len(c.ClientID) + 2
 	l, err := util.EncodeUvarint(buf[:], uint32(length))
+	if err != nil {
+		return nil, err
+	}
 
 	// Encode message to stream
 	// Fixed header
@@ -140,7 +143,7 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 		}
 		i += n
 		if c.Password != "" {
-			n, err = util.EncodeUTF8(b[i:], c.Password)
+			_, err = util.EncodeUTF8(b[i:], c.Password)
 			if err != nil {
 				return nil, err
 			}
@@ -183,7 +186,7 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	}
 	// Parse variable header
-	if bytes.Compare(buf[2:6], []byte{'M', 'Q', 'T', 'T'}) != 0 {
+	if !bytes.Equal(buf[2:6], []byte{'M', 'Q', 'T', 'T'}) {
 		return n, fmt.Errorf(
 			"connect: unknown protocol: %s", string(buf[2:6]))
 	}
@@ -288,7 +291,9 @@ func (c *ConnAck) ReadFrom(r io.Reader) (n int64, err error) {
 	var raw [3]byte
 	N, err := r.Read(raw[:])
 	n = int64(N)
-	if raw[0] > byte(2) {
+	if err != nil {
+		return n, err
+	} else if raw[0] > byte(2) {
 		return n, mqtt.ErrPacketLong
 	} else if raw[0] < byte(2) {
 		return n, mqtt.ErrPacketShort

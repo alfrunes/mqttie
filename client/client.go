@@ -12,15 +12,19 @@ import (
 	"github.com/satori/go.uuid"
 )
 
-const (
-	maxKeepAlive = ^uint16(0)
-)
-
 var (
-	ErrIllegalResponse  = fmt.Errorf("illegal response received from server")
+	// ErrIllegalResponse is an internal error returned if the client
+	// receives an illegal packet.
+	ErrIllegalResponse = fmt.Errorf("illegal response received from server")
+	// ErrInternalConflict is a similar internal error returned if the
+	// internal receive routine sends an unexpected packet to the main
+	// routine.
 	ErrInternalConflict = fmt.Errorf("received unexpected packet")
 )
 
+// Client is the package representation of an MQTT client. The struct holds all
+// internal client state and session data to provide a functional high-level
+// API to the MQTT protocol.
 type Client struct {
 	// ClientID is the identity communicated with the server on connect.
 	ClientID string
@@ -84,15 +88,10 @@ func NewClient(connection net.Conn, options ...*ClientOptions) (client *Client) 
 		}
 	}
 	client.io = packets.NewPacketIO(connection, client.version, timeout)
-	rand.Read(r[:])
-	defer func() {
-		// In case binary package panics (should never occur)
-		if recover() != nil {
-			client.packetIDCounter = 0
-		}
-	}()
-	initID := binary.LittleEndian.Uint16(r[:])
-	client.packetIDCounter = uint32(initID)
+	if _, err := rand.Read(r[:]); err == nil {
+		initID := binary.LittleEndian.Uint16(r[:])
+		client.packetIDCounter = uint32(initID)
+	}
 	go client.recvRoutine()
 	return client
 }

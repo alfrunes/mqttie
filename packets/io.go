@@ -41,7 +41,11 @@ func (p *PacketIO) Send(pkt mqtt.Packet) (err error) {
 	p.sendMutex <- struct{}{}
 	defer func() { <-p.sendMutex }()
 	if p.timeout > time.Duration(0) {
-		p.conn.SetWriteDeadline(time.Now().Add(p.timeout))
+		if err := p.conn.SetWriteDeadline(
+			time.Now().Add(p.timeout),
+		); err != nil {
+			return err
+		}
 	}
 	_, err = pkt.WriteTo(p.conn)
 	return err
@@ -54,7 +58,11 @@ func (p *PacketIO) Recv() (pkg mqtt.Packet, err error) {
 	p.recvMutex <- struct{}{}
 	defer func() { <-p.recvMutex }()
 	if p.timeout > time.Duration(0) {
-		p.conn.SetWriteDeadline(time.Now().Add(p.timeout))
+		if err := p.conn.SetReadDeadline(
+			time.Now().Add(p.timeout),
+		); err != nil {
+			return nil, err
+		}
 	}
 	_, err = p.conn.Read(buf[:])
 	if err != nil {

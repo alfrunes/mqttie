@@ -22,6 +22,7 @@ func TestConnect(t *testing.T) {
 	err := bufIO.Send(connect)
 	assert.NoError(t, err)
 	p, err := bufIO.Recv()
+	assert.NoError(t, err)
 	assert.Equal(t, connect, p)
 	connect.ClientID = "foobar"
 	connect.CleanSession = true
@@ -66,7 +67,7 @@ func TestConnect(t *testing.T) {
 	buf.Reset()
 
 	// Truncate buffer to cause io errors
-	b, err := connect.MarshalBinary()
+	b, _ := connect.MarshalBinary()
 	buf.Write(b)
 	// Error reading password
 	buf.Truncate(len(b) - 10)

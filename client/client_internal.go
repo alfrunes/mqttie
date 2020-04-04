@@ -36,12 +36,12 @@ func (c *Client) recvRoutine() {
 			c.errChan <- err
 			return
 		}
-		switch packet.(type) {
+		switch packet := packet.(type) {
 		case *packets.PingResp:
 			// Bypass to response channel.
-			c.pingResp <- packet.(*packets.PingResp)
+			c.pingResp <- packet
 		case *packets.ConnAck:
-			c.connAck <- packet.(*packets.ConnAck)
+			c.connAck <- packet
 		case *packets.SubAck, *packets.UnsubAck:
 			// Use generic reflection of the (dereferenced) value
 			pVal := reflect.ValueOf(packet).Elem()
@@ -63,41 +63,41 @@ func (c *Client) recvRoutine() {
 			}
 
 		case *packets.Publish:
-			pub := packet.(*packets.Publish)
-			subChan := c.subs.Get(pub.Topic.Name)
+			subChan := c.subs.Get(packet.Topic.Name)
 			if subChan != nil {
 				select {
-				case subChan <- pub.Payload:
+				case subChan <- packet.Payload:
 
 				default:
 					log.Errorf("Subscriber channel %s is "+
 						"full, discarding payload",
-						pub.Topic.Name)
+						packet.Topic.Name)
 				}
 			} else {
 				log.Warnf("Internal error: no subscriber "+
-					"chan for topic %s", pub.Topic.Name)
+					"chan for topic %s", packet.Topic.Name)
 			}
-			switch pub.QoS {
+			switch packet.QoS {
 			case mqtt.QoS0:
 				// We're done here
 
 			case mqtt.QoS1:
 				// Send puback and delete packet from pending.
 				pubAck := &packets.PubAck{
-					Version:          c.version,
-					PacketIdentifier: pub.PacketIdentifier,
+					Version: c.version,
+					PacketIdentifier: packet.
+						PacketIdentifier,
 				}
 				err := c.io.Send(pubAck)
 				if err != nil {
 					log.Error(err)
 					c.errChan <- err
 				}
-				c.pendingPackets.Del(pub.PacketIdentifier)
+				c.pendingPackets.Del(packet.PacketIdentifier)
 
 			case mqtt.QoS2:
 				// Send PubRec and update pending packet.
-				packetID := pub.PacketIdentifier
+				packetID := packet.PacketIdentifier
 				pubRec := &packets.PubRec{
 					Version:          c.version,
 					PacketIdentifier: packetID,
@@ -109,27 +109,24 @@ func (c *Client) recvRoutine() {
 					return
 				}
 				c.pendingPackets.Set(
-					pub.PacketIdentifier,
+					packet.PacketIdentifier,
 					pubRec)
 			}
 
 		case *packets.PubAck:
 			// Delete pending packet; publish completed
-			pubAck := packet.(*packets.PubAck)
-			c.pendingPackets.Del(pubAck.PacketIdentifier)
+			c.pendingPackets.Del(packet.PacketIdentifier)
 
 		case *packets.PubComp:
 			// Delete pending packet; publish completed
-			pubComp := packet.(*packets.PubComp)
-			c.pendingPackets.Del(pubComp.PacketIdentifier)
+			c.pendingPackets.Del(packet.PacketIdentifier)
 
 		case *packets.PubRel:
 			// Discard cached packet and send publish complete
-			pub := packet.(*packets.PubRel)
-			c.pendingPackets.Del(pub.PacketIdentifier)
+			c.pendingPackets.Del(packet.PacketIdentifier)
 			pubComp := &packets.PubComp{
 				Version:          c.version,
-				PacketIdentifier: pub.PacketIdentifier,
+				PacketIdentifier: packet.PacketIdentifier,
 			}
 			err := c.io.Send(pubComp)
 			if err != nil {
@@ -140,11 +137,10 @@ func (c *Client) recvRoutine() {
 
 		case *packets.PubRec:
 			// Update pending packets and send PubRel
-			pubRec := packet.(*packets.PubRec)
 			if ackChan, ok := c.ackChan.
-				Get(pubRec.PacketIdentifier); ok {
+				Get(packet.PacketIdentifier); ok {
 				select {
-				case ackChan <- pubRec:
+				case ackChan <- packet:
 				default:
 					log.Warn("Packet discarded: PUBREC")
 				}
@@ -153,9 +149,9 @@ func (c *Client) recvRoutine() {
 			}
 			pubRel := &packets.PubRel{
 				Version:          c.version,
-				PacketIdentifier: pubRec.PacketIdentifier,
+				PacketIdentifier: packet.PacketIdentifier,
 			}
-			c.pendingPackets.Set(pubRec.PacketIdentifier, pubRel)
+			c.pendingPackets.Set(packet.PacketIdentifier, pubRel)
 			err := c.io.Send(pubRel)
 			if err != nil {
 				log.Error(err)

@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/alfrunes/mqttie/mqtt"
-	"github.com/alfrunes/mqttie/util"
+	"github.com/alfrunes/mqttie/x/util"
 )
 
 const (
@@ -207,6 +207,9 @@ func (u *Unsubscribe) MarshalBinary() (b []byte, err error) {
 		remLength += len([]byte(topic)) + 2
 	}
 	n, err := util.EncodeUvarint(buf[:], uint32(remLength))
+	if err != nil {
+		return nil, err
+	}
 
 	b = make([]byte, n+remLength+1)
 	// Fixed header
