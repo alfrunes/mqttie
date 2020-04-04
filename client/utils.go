@@ -6,87 +6,67 @@ import (
 	"github.com/alfrunes/mqttie/mqtt"
 )
 
-type topicChan struct {
-	Chan   chan<- []byte
-	Child  map[string]*topicChan
-	Parent interface{}
+type subMap map[string]interface{}
+
+func (s subMap) Add(topic string, c chan<- []byte) bool {
+	i := strings.Index(topic, "+")
+	if i < 0 {
+		s[topic] = c
+		return true
+	}
+	if m, ok := s[topic[:i+1]].(subMap); ok {
+		return m.Add(topic[i+1:], c)
+	}
+	m := make(subMap)
+	if m.Add(topic[i+1:], c) {
+		s[topic[:i+1]] = m
+		return true
+	}
+	return false
 }
 
-func (t *topicChan) add(topic string, c chan<- []byte) {
-	topicPtr := t
-	if topicPtr.Child == nil {
-		t.Child = make(map[string]*topicChan)
-		topicPtr = t
+func (s subMap) Get(topic string) chan<- []byte {
+	if c, ok := s[topic].(chan<- []byte); ok {
+		return c
 	}
-	scopes := strings.Split(topic, "/")
-	for _, name := range scopes {
-		if s, ok := topicPtr.Child[name]; ok {
-			topicPtr = s
-		} else {
-			topicPtr.Child[name] = &topicChan{
-				Child:  make(map[string]*topicChan),
-				Parent: topicPtr,
+	var i, j int
+	for {
+		// Check multi-level wildcard (highest precedence)
+		if c, ok := s[topic[:i]+"#"].(chan<- []byte); ok {
+			return c
+		}
+		if tmp, ok := s[topic[:i]+"+"].(subMap); ok {
+			// Carve out and replace scope with wildcard
+			// and recurse onward.
+			j = strings.Index(topic[i:], "/")
+			if c := tmp.Get(topic[i+j:]); c != nil {
+				return c
 			}
 		}
-		if topicPtr.Child == nil {
-			topicPtr.Child = make(map[string]*topicChan)
-		}
-		topicPtr = topicPtr.Child[name]
-	}
-	topicPtr.Chan = c
-}
-
-func (t *topicChan) get(topic string) chan<- []byte {
-	// TODO: wildcard match ALL matching topics
-	topicPtr := t
-	if topicPtr == nil {
-		return nil
-	}
-	scopes := strings.Split(topic, "/")
-	for i, scope := range scopes {
-		if wildcard, ok := topicPtr.Child["*"]; ok {
-			if i == len(scopes)-1 && wildcard.Chan != nil {
-				return wildcard.Chan
-			} else {
-				return nil
-			}
-		}
-		// FIXME should try named branch if wildcard leads to dead end
-		if wildcard, ok := topicPtr.Child["+"]; ok {
-			topicPtr = wildcard
-			continue
-		}
-		p, ok := topicPtr.Child[scope]
-		if !ok {
-			return nil
-		}
-		topicPtr = p
-	}
-
-	return topicPtr.Chan
-}
-
-func (t *topicChan) remove(topic string) {
-	scopes := strings.Split(topic, "/")
-	topicPtr := t
-
-	for _, scope := range scopes {
-		if child, ok := topicPtr.Child[scope]; ok {
-			topicPtr = child
-		}
-	}
-	topicPtr.Chan = nil
-	// Clean up branch
-	root := topicPtr
-	for root.Parent != nil {
-		parent := root.Parent.(*topicChan)
-		if len(parent.Child) > 1 ||
-			parent.Chan != nil {
+		// Advance index
+		j = strings.Index(topic[i:], "/")
+		if j < 0 {
 			break
 		}
-		root = parent
+		i += j + 1
 	}
-	root.Child = nil
+	return nil
+}
+
+func (s subMap) Del(topic string) {
+	i := strings.Index(topic, "+")
+	if i == -1 {
+		delete(s, topic)
+		return
+	}
+	if m, ok := s[topic[:i+1]].(subMap); ok {
+		if len(m) <= 1 {
+			delete(s, topic[:i+1])
+		} else {
+			m.Del(topic[i+1:])
+		}
+	}
+	return
 }
 
 type packetMap struct {

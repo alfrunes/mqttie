@@ -36,8 +36,8 @@ type Client struct {
 	// errChan is an internal error channel detecting asyncronous fatal
 	// errors.
 	errChan chan error
-	// subscribeChans that maps topic names to chan []byte
-	subscribeChans topicChan
+	// subs that maps topic names to chan []byte for subscriptions
+	subs subMap
 
 	// respChan is used to pass ConnAck and PingResp responses to the
 	// caller goroutine.
@@ -67,6 +67,7 @@ func NewClient(connection net.Conn, options ...*ClientOptions) (client *Client) 
 		errChan:        make(chan error, 1),
 		pingResp:       make(chan *packets.PingResp, 1),
 		connAck:        make(chan *packets.ConnAck, 1),
+		subs:           make(subMap),
 	}
 	for _, opt := range options {
 		if opt == nil {
@@ -235,16 +236,10 @@ func (c *Client) Publish(
 
 // Subscribe sends a subscribe request with the given topics. On success
 // the list of status codes corresponding to the provided topics are returned.
-func (c *Client) Subscribe(
-	topics []mqtt.Topic,
-	topicChans []chan<- []byte,
-) ([]uint8, error) {
+func (c *Client) Subscribe(topics ...mqtt.Subscription) ([]uint8, error) {
 	var statusCodes []uint8
 	if len(topics) == 0 {
 		return nil, nil
-	} else if len(topics) != len(topicChans) {
-		return nil, fmt.Errorf(
-			"Invalid arguments: len(topics) != len(topicChans)")
 	}
 
 	// Reserve packet id
@@ -252,15 +247,16 @@ func (c *Client) Subscribe(
 	// Setup ack channel
 	c.ackChan.New(packetID)
 	defer c.ackChan.Del(packetID)
-	for i, topic := range topics {
-		// Reserve receive channels
-		c.subscribeChans.add(topic.Name, topicChans[i])
-	}
 	// Prepare and send packet.
 	sub := &packets.Subscribe{
 		Version:          c.version,
 		PacketIdentifier: packetID,
-		Topics:           topics,
+	}
+	sub.Topics = make([]mqtt.Topic, len(topics))
+	for i, topic := range topics {
+		// Reserve receive channels
+		c.subs.Add(topic.Name, topic.Recv)
+		sub.Topics[i] = topic.Topic
 	}
 	err := c.io.Send(sub)
 	if err != nil {
@@ -274,7 +270,7 @@ func (c *Client) Subscribe(
 			// Remove subscribe channels with bad status code.
 			for i, status := range statusCodes {
 				if status > 2 {
-					c.subscribeChans.remove(topics[i].Name)
+					c.subs.Del(topics[i].Name)
 				}
 			}
 		} else {

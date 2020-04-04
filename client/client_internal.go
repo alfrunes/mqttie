@@ -65,7 +65,7 @@ func (c *Client) recvRoutine() {
 		case *packets.Publish:
 			pub := packet.(*packets.Publish)
 
-			subChan := c.subscribeChans.get(pub.Topic.Name)
+			subChan := c.subs.Get(pub.Topic.Name)
 			if subChan != nil {
 				select {
 				case subChan <- pub.Payload:

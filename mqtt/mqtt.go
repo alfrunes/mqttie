@@ -46,3 +46,8 @@ type Topic struct {
 	Name string
 	QoS  QoS
 }
+
+type Subscription struct {
+	Topic
+	Recv chan<- []byte
+}
