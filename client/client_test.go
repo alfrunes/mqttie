@@ -480,7 +480,7 @@ func TestSubscribe(t *testing.T) {
 				Recv: subChan,
 			}, {
 				Topic: mqtt.Topic{
-					Name: "foo/bar",
+					Name: "foo/+",
 					QoS:  mqtt.QoS1,
 				},
 				Recv: subChan,
@@ -597,6 +597,30 @@ func TestSubscribe(t *testing.T) {
 					<-finished
 				}
 			}
+
+			// Unsubscribe from "active" subscription
+			for i, topic := range testCase.Topics {
+				if testCase.ReturnCodes[i] > 2 {
+					continue
+				}
+				conn.On("Write", mock.Anything).Run(func(
+					args mock.Arguments,
+				) {
+					unsubAck := packets.UnsubAck{
+						Version: mqtt.MQTTv311,
+						PacketIdentifier: uint16(client.
+							packetIDCounter),
+					}
+					b, _ := unsubAck.MarshalBinary()
+					conn.ReadChan <- b
+				}).Return(-1, nil)
+				conn.On("Read", mock.Anything).
+					Return(-1, nil).
+					Times(8)
+				err := client.Unsubscribe(topic.Name)
+				assert.NoError(t, err)
+			}
+
 		})
 	}
 }
