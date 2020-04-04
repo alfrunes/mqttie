@@ -64,7 +64,6 @@ func (c *Client) recvRoutine() {
 
 		case *packets.Publish:
 			pub := packet.(*packets.Publish)
-
 			subChan := c.subs.Get(pub.Topic.Name)
 			if subChan != nil {
 				select {
@@ -78,9 +77,7 @@ func (c *Client) recvRoutine() {
 			} else {
 				log.Warnf("Internal error: no subscriber "+
 					"chan for topic %s", pub.Topic.Name)
-				continue
 			}
-
 			switch pub.QoS {
 			case mqtt.QoS0:
 				// We're done here

@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// TODO: Implement PacketIO interface and create a mock for it; it's too complex mocking conn (+ already covered by packet tests).
-
 var (
 	True       = true
 	False      = false
@@ -436,6 +434,170 @@ func TestPublish(t *testing.T) {
 			} else {
 				assert.EqualError(t, err,
 					testCase.PubErr.Error())
+			}
+		})
+	}
+}
+
+func TestSubscribe(t *testing.T) {
+	subChan := make(chan []byte, 5)
+	testCases := []struct {
+		Name string
+
+		Topics      []mqtt.Subscription
+		ReturnCodes []uint8
+		Publishes   []packets.Publish
+	}{
+		{
+			Name: "Sucessful subscription",
+
+			Topics: []mqtt.Subscription{{
+				Topic: mqtt.Topic{
+					Name: "foo",
+					QoS:  mqtt.QoS0,
+				},
+				Recv: subChan,
+			}, {
+				Topic: mqtt.Topic{
+					Name: "foo/bar",
+					QoS:  mqtt.QoS1,
+				},
+				Recv: subChan,
+			}, {
+				Topic: mqtt.Topic{
+					Name: "foo/+/baz",
+					QoS:  mqtt.QoS2,
+				},
+				Recv: subChan,
+			}},
+			ReturnCodes: []uint8{0, 1, 2},
+		}, {
+			Name: "Sucessful subscription w/incoming publish",
+
+			Topics: []mqtt.Subscription{{
+				Topic: mqtt.Topic{
+					Name: "foo",
+					QoS:  mqtt.QoS0,
+				},
+				Recv: subChan,
+			}, {
+				Topic: mqtt.Topic{
+					Name: "foo/bar",
+					QoS:  mqtt.QoS1,
+				},
+				Recv: subChan,
+			}, {
+				Topic: mqtt.Topic{
+					Name: "foo/+/baz",
+					QoS:  mqtt.QoS2,
+				},
+				Recv: subChan,
+			}, {
+				Topic: mqtt.Topic{
+					Name: "n/+",
+					QoS:  mqtt.QoS0,
+				},
+				Recv: subChan,
+			}},
+			ReturnCodes: []uint8{0, 1, 2, 0x80},
+			// NOTE: packet IDs will be assigned in test
+			Publishes: []packets.Publish{{
+				Topic: mqtt.Topic{
+					Name: "foo",
+					QoS:  mqtt.QoS0,
+				},
+				Payload: []byte("foo"),
+			}, {
+				Topic: mqtt.Topic{
+					Name: "foo/bar",
+					QoS:  mqtt.QoS1,
+				},
+				Payload: []byte("foobar"),
+			}, {
+				Topic: mqtt.Topic{
+					Name: "foo/bar/baz",
+					QoS:  mqtt.QoS2,
+				},
+				Payload: []byte("foobarbaz"),
+			}, {
+				Topic: mqtt.Topic{
+					Name: "n/a",
+					QoS:  mqtt.QoS0,
+				},
+				Payload: []byte("foobarbaz"),
+			}},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.Name, func(t *testing.T) {
+			conn := NewFakeConn(2)
+			defer conn.Close()
+			client := NewClient(conn)
+			conn.On("Read", mock.Anything).
+				Return(0, nil).
+				Times(4)
+			conn.On("Close").Return(nil)
+
+			conn.On("Write", mock.Anything).
+				Run(func(args mock.Arguments) {
+					subAck := packets.SubAck{
+						Version: mqtt.MQTTv311,
+						PacketIdentifier: uint16(client.
+							packetIDCounter),
+						ReturnCodes: testCase.ReturnCodes,
+					}
+					b, _ := subAck.MarshalBinary()
+					conn.ReadChan <- b
+				}).Return(0, nil).Once()
+			ret, err := client.Subscribe(testCase.Topics...)
+			assert.NoError(t, err)
+			assert.Equal(t, testCase.ReturnCodes, ret)
+
+			finished := make(chan struct{}, 1)
+			for _, pub := range testCase.Publishes {
+				conn.On("Read", mock.Anything).
+					Return(0, nil).Times(8)
+				if pub.QoS > mqtt.QoS0 {
+					conn.On("Write", mock.Anything).Run(func(
+						args mock.Arguments,
+					) {
+						if pub.QoS != mqtt.QoS2 {
+							finished <- struct{}{}
+							return
+						}
+						pubRel := &packets.PubRel{
+							Version: mqtt.MQTTv311,
+							PacketIdentifier: pub.
+								PacketIdentifier,
+						}
+						b, _ := pubRel.MarshalBinary()
+						conn.ReadChan <- b
+					}).Return(-1, nil).Once()
+					if pub.QoS > mqtt.QoS1 {
+						conn.On("Write", mock.Anything).Run(func(
+							args mock.Arguments,
+						) {
+							finished <- struct{}{}
+						}).
+							Return(-1, nil).Once()
+					}
+				}
+				pub.PacketIdentifier = uint16(client.
+					packetIDCounter + 1)
+				b, err := pub.MarshalBinary()
+				if !assert.NoError(t, err) {
+					t.FailNow()
+				}
+				conn.ReadChan <- b
+				if c := client.subs.Get(
+					pub.Topic.Name,
+				); c != nil && cap(c) > 0 {
+					b = <-subChan
+				}
+				if pub.QoS > mqtt.QoS0 {
+					<-finished
+				}
 			}
 		})
 	}

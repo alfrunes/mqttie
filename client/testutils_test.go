@@ -69,25 +69,21 @@ type FakeConn struct {
 	ReadChan chan []byte
 	Buf      []byte
 	i        int
-
-	sendChan chan struct{}
 }
 
 func NewFakeConn(bufSize int) *FakeConn {
 	return &FakeConn{
 		ReadChan: make(chan []byte, bufSize),
-		sendChan: make(chan struct{}, 1),
 	}
 }
 
 func (f *FakeConn) Write(b []byte) (int, error) {
 	args := f.Called(b)
-	f.sendChan <- struct{}{}
 	var r0 int
 	if rf, ok := args.Get(0).(func([]byte) int); ok {
 		r0 = rf(b)
 	} else {
-		r0 = args.Int(0)
+		r0 = len(b)
 	}
 
 	var r1 error
@@ -108,10 +104,6 @@ func (f *FakeConn) Read(b []byte) (int, error) {
 				return 0, io.EOF
 			}
 		}
-		_, open = <-f.sendChan
-		if !open {
-			return 0, io.EOF
-		}
 	}
 	i := copy(b, f.Buf)
 	if i < len(f.Buf) {
@@ -125,7 +117,7 @@ func (f *FakeConn) Read(b []byte) (int, error) {
 	if rf, ok := args.Get(0).(func([]byte) int); ok {
 		r0 = rf(b)
 	} else {
-		r0 = args.Int(0)
+		r0 = len(b)
 	}
 
 	var r1 error
@@ -140,7 +132,6 @@ func (f *FakeConn) Read(b []byte) (int, error) {
 
 func (f *FakeConn) Close() error {
 	args := f.Called()
-	close(f.sendChan)
 	close(f.ReadChan)
 
 	var r0 error
