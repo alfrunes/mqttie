@@ -37,13 +37,13 @@ type Client struct {
 
 	io packets.IO
 
-	// errChan is an internal error channel detecting asyncronous fatal
+	// errChan is an internal error channel detecting asynchronous fatal
 	// errors.
 	errChan chan error
 	// subs that maps topic names to chan []byte for subscriptions
 	subs subMap
 
-	// respChan is used to pass ConnAck and PingResp responses to the
+	// pingResp is used to pass PingResp responses to the
 	// caller goroutine.
 	pingResp chan *packets.PingResp
 	// ackChan is used to pass SubAck and UnsubAck responses to the caller

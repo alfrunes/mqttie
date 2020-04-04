@@ -302,7 +302,7 @@ func TestPublish(t *testing.T) {
 		Retain  bool
 	}{
 		{
-			Name: "Sucessful publish QoS0",
+			Name: "Successful publish QoS0",
 
 			Version: mqtt.MQTTv311,
 			Topic: mqtt.Topic{
@@ -312,7 +312,7 @@ func TestPublish(t *testing.T) {
 			Payload: []byte("foobar"),
 		},
 		{
-			Name: "Sucessful publish QoS1",
+			Name: "Successful publish QoS1",
 
 			Version: mqtt.MQTTv311,
 			Topic: mqtt.Topic{
@@ -322,7 +322,7 @@ func TestPublish(t *testing.T) {
 			Payload: []byte("foobar"),
 		},
 		{
-			Name: "Sucessful publish QoS2",
+			Name: "Successful publish QoS2",
 
 			Version: mqtt.MQTTv311,
 			Topic: mqtt.Topic{

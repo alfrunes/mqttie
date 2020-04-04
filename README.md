@@ -15,4 +15,4 @@
  * Create a low-level packet interface for the mqtt protocol (Partially complete)
  * Create a high-level client interface for the mqtt protocol (Started)
  * Support all versions of the protocol (currently 3.1.1)
- * Create a an mqtt broker (not started)
+ * Create an mqtt broker (not started)

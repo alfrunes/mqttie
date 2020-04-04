@@ -11,7 +11,7 @@ import (
 )
 
 func (c *Client) aquirePacketID() uint16 {
-	// Thread safe method to aquire unique packet ID.
+	// Thread safe method to acquire unique packet ID.
 	for i := 0; i < int(^uint16(0)); i++ {
 		newVal := atomic.AddUint32(&c.packetIDCounter, 1)
 		ret := uint16(newVal)
