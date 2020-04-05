@@ -12,15 +12,15 @@ import (
 
 var (
 	TestTopics = []mqtt.Topic{
-		mqtt.Topic{
+		{
 			Name: "foo/qos0",
 			QoS:  mqtt.QoS0,
 		},
-		mqtt.Topic{
+		{
 			Name: "bar/qos1",
 			QoS:  mqtt.QoS1,
 		},
-		mqtt.Topic{
+		{
 			Name: "baz/qos2",
 			QoS:  mqtt.QoS2,
 		},
@@ -454,19 +454,19 @@ func TestSubscribe(t *testing.T) {
 					Name: "foo",
 					QoS:  mqtt.QoS0,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}, {
 				Topic: mqtt.Topic{
 					Name: "foo/bar",
 					QoS:  mqtt.QoS1,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}, {
 				Topic: mqtt.Topic{
 					Name: "foo/+/baz",
 					QoS:  mqtt.QoS2,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}},
 			ReturnCodes: []uint8{0, 1, 2},
 		}, {
@@ -477,25 +477,25 @@ func TestSubscribe(t *testing.T) {
 					Name: "foo",
 					QoS:  mqtt.QoS0,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}, {
 				Topic: mqtt.Topic{
 					Name: "foo/+",
 					QoS:  mqtt.QoS1,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}, {
 				Topic: mqtt.Topic{
 					Name: "foo/+/baz",
 					QoS:  mqtt.QoS2,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}, {
 				Topic: mqtt.Topic{
 					Name: "n/+",
 					QoS:  mqtt.QoS0,
 				},
-				Recv: subChan,
+				Messages: subChan,
 			}},
 			ReturnCodes: []uint8{0, 1, 2, 0x80},
 			// NOTE: packet IDs will be assigned in test

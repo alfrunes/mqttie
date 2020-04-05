@@ -35,7 +35,7 @@ type Client struct {
 
 	expiresAt time.Time
 
-	io packets.IO
+	io *packets.PacketIO
 
 	// errChan is an internal error channel detecting asynchronous fatal
 	// errors.
@@ -254,7 +254,7 @@ func (c *Client) Subscribe(topics ...mqtt.Subscription) ([]uint8, error) {
 	sub.Topics = make([]mqtt.Topic, len(topics))
 	for i, topic := range topics {
 		// Reserve receive channels
-		c.subs.Add(topic.Name, topic.Recv)
+		c.subs.Add(topic.Name, topic.Messages)
 		sub.Topics[i] = topic.Topic
 	}
 	err := c.io.Send(sub)

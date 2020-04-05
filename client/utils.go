@@ -3,7 +3,7 @@ package client
 import (
 	"strings"
 
-	"github.com/alfrunes/mqttie/mqtt"
+	"github.com/alfrunes/mqttie/packets"
 )
 
 type subMap map[string]interface{}
@@ -69,18 +69,18 @@ func (s subMap) Del(topic string) {
 }
 
 type packetMap struct {
-	packets map[uint16]mqtt.Packet
+	packets map[uint16]packets.Packet
 	mutex   chan struct{}
 }
 
 func newPacketMap() *packetMap {
 	return &packetMap{
-		packets: make(map[uint16]mqtt.Packet),
+		packets: make(map[uint16]packets.Packet),
 		mutex:   make(chan struct{}, 1),
 	}
 }
 
-func (p *packetMap) Add(packetID uint16, packet mqtt.Packet) bool {
+func (p *packetMap) Add(packetID uint16, packet packets.Packet) bool {
 	p.mutex <- struct{}{}
 	defer func() { <-p.mutex }()
 	if _, ok := p.packets[packetID]; ok {
@@ -90,13 +90,13 @@ func (p *packetMap) Add(packetID uint16, packet mqtt.Packet) bool {
 	return true
 }
 
-func (p *packetMap) Set(packetID uint16, packet mqtt.Packet) {
+func (p *packetMap) Set(packetID uint16, packet packets.Packet) {
 	p.mutex <- struct{}{}
 	p.packets[packetID] = packet
 	<-p.mutex
 }
 
-func (p *packetMap) Get(packetID uint16) (mqtt.Packet, bool) {
+func (p *packetMap) Get(packetID uint16) (packets.Packet, bool) {
 	p.mutex <- struct{}{}
 	defer func() { <-p.mutex }()
 	packet, ok := p.packets[packetID]
@@ -110,13 +110,13 @@ func (p *packetMap) Del(packetID uint16) {
 }
 
 type packetChanMap struct {
-	chans map[uint16]chan mqtt.Packet
+	chans map[uint16]chan packets.Packet
 	mutex chan struct{}
 }
 
 func newPacketChanMap() *packetChanMap {
 	return &packetChanMap{
-		chans: make(map[uint16]chan mqtt.Packet),
+		chans: make(map[uint16]chan packets.Packet),
 		mutex: make(chan struct{}, 1),
 	}
 }
@@ -127,11 +127,11 @@ func (p *packetChanMap) New(packetID uint16) bool {
 	if _, ok := p.chans[packetID]; ok {
 		return false
 	}
-	p.chans[packetID] = make(chan mqtt.Packet, 1)
+	p.chans[packetID] = make(chan packets.Packet, 1)
 	return true
 }
 
-func (p *packetChanMap) Get(packetID uint16) (chan mqtt.Packet, bool) {
+func (p *packetChanMap) Get(packetID uint16) (chan packets.Packet, bool) {
 	p.mutex <- struct{}{}
 	defer func() { <-p.mutex }()
 	c, ok := p.chans[packetID]

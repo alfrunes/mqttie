@@ -2,18 +2,28 @@ package packets
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"time"
 
 	"github.com/alfrunes/mqttie/mqtt"
 )
 
-type IO interface {
-	Send(p mqtt.Packet) (err error)
-	Recv() (p mqtt.Packet, err error)
-	Close() error
+// Packet contains a generic packet interface conforming with the standard
+// io WriteTo/ReadFrom definitions.
+type Packet interface {
+	// WriteTo serializes the packet and writes it to the given writer
+	// returning the number of bytes written.
+	WriteTo(w io.Writer) (n int64, err error)
+	// ReadFrom reads and unmarshals the packet from the given stream
+	// returning the number of bytes read.
+	ReadFrom(r io.Reader) (n int64, err error)
+	// MarshalBinary serializes the packet to a binary buffer.
+	MarshalBinary() (b []byte, err error)
 }
 
+// PacketIO provides an interface for communicating packets between client and
+// server.
 type PacketIO struct {
 	timeout   time.Duration
 	conn      net.Conn
@@ -22,11 +32,12 @@ type PacketIO struct {
 	recvMutex chan struct{}
 }
 
+// NewPacketIO initializes a new PacketIO struct.
 func NewPacketIO(
 	conn net.Conn,
 	version mqtt.Version,
 	timeout time.Duration,
-) IO {
+) *PacketIO {
 	return &PacketIO{
 		timeout:   timeout,
 		conn:      conn,
@@ -37,7 +48,7 @@ func NewPacketIO(
 }
 
 // Send writes the packet p to stream w, ensuring mutual exclusive access.
-func (p *PacketIO) Send(pkt mqtt.Packet) (err error) {
+func (p *PacketIO) Send(pkt Packet) (err error) {
 	p.sendMutex <- struct{}{}
 	defer func() { <-p.sendMutex }()
 	if p.timeout > time.Duration(0) {
@@ -53,7 +64,7 @@ func (p *PacketIO) Send(pkt mqtt.Packet) (err error) {
 
 // Recv reads and encodes a packet from stream. The Recv operation is protected
 // by a mutex, but should only be handled by a single goroutine.
-func (p *PacketIO) Recv() (pkg mqtt.Packet, err error) {
+func (p *PacketIO) Recv() (pkg Packet, err error) {
 	var buf [1]byte
 	p.recvMutex <- struct{}{}
 	defer func() { <-p.recvMutex }()
@@ -228,6 +239,7 @@ func (p *PacketIO) Recv() (pkg mqtt.Packet, err error) {
 	return pkg, err
 }
 
+// Close closes the underlying connection.
 func (p *PacketIO) Close() error {
 	return p.conn.Close()
 }
