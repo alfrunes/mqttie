@@ -30,7 +30,8 @@ type Version uint8
 const (
 	// MQTTv311 defines the MQTT protocol version 3.1.1
 	MQTTv311 Version = 0x04
-	// TODO: MOAR VERSIONS!
+	// MQTTv5 defines the MQTT protocol version 5.0
+	MQTTv5 Version = 0x05
 )
 
 var (

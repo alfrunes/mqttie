@@ -19,6 +19,18 @@ func EncodeUvarint(b []byte, val uint32) (n int, err error) {
 	return binary.PutUvarint(b, uint64(val)), nil
 }
 
+func GetUvarintLen(val uint64) int {
+	var length int
+	for {
+		length++
+		val /= 128
+		if val < 1 {
+			break
+		}
+	}
+	return length
+}
+
 func ReadVarint(r io.Reader) (v uint32, n int, err error) {
 	var b [1]byte
 	// Read up to maximum of 4 bytes
@@ -36,6 +48,39 @@ func ReadVarint(r io.Reader) (v uint32, n int, err error) {
 	return 0, 4, fmt.Errorf("Varint too long: > 4 bytes")
 }
 
+func EncodeValue(b []byte, val interface{}) int {
+	var n int
+	switch v := val.(type) {
+	case string:
+		l := uint16(len(v))
+		binary.BigEndian.PutUint16(b, l)
+		n += 2
+		n += copy(b[n:], v[:int(l)])
+
+	case []byte:
+		l := uint16(len(v))
+		binary.BigEndian.PutUint16(b, l)
+		n += 2
+		n += copy(b[n:], v[:int(l)])
+
+	case uint32:
+		binary.BigEndian.PutUint32(b, v)
+		n = 4
+
+	case uint16:
+		binary.BigEndian.PutUint16(b, v)
+		n = 2
+
+	case uint8:
+		b[0] = v
+		n = 1
+
+	default:
+		panic(fmt.Errorf("invalid argument type: %v", val))
+	}
+	return n
+}
+
 func EncodeUTF8(b []byte, str string) (n int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -47,7 +92,7 @@ func EncodeUTF8(b []byte, str string) (n int, err error) {
 		}
 	}()
 	var l int
-	if l = len(str); l > 0xFFFFFFFF {
+	if l = len(str); l > 0xFFFF {
 		return 0, fmt.Errorf("UTF-8 string too long")
 	}
 	binary.BigEndian.PutUint16(b, uint16(l))

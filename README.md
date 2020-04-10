@@ -15,5 +15,5 @@
 ## High-level project goals
  * Create a low-level packet interface for the mqtt protocol (Partially complete)
  * Create a high-level client interface for the mqtt protocol (Started)
- * Support all versions of the protocol (currently 3.1.1)
+ * Support all versions of the protocol (currently MQTT 3.1.1, MQTT 5.0 in progress)
  * Create an mqtt broker (not started)

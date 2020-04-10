@@ -159,10 +159,6 @@ func TestConnect(t *testing.T) {
 	assert.Error(t, err)
 	buf.Reset()
 	connect.WillTopic.QoS = mqtt.QoS2
-	// Illegal will message
-	connect.WillMessage = make([]byte, int(^uint16(0))+1)
-	err = bufIO.Send(connect)
-	assert.Error(t, err)
 }
 
 func TestConnAck(t *testing.T) {
