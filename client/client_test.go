@@ -447,7 +447,7 @@ func TestSubscribe(t *testing.T) {
 		Publishes   []packets.Publish
 	}{
 		{
-			Name: "Sucessful subscription",
+			Name: "Successful subscription",
 
 			Topics: []mqtt.Subscription{{
 				Topic: mqtt.Topic{
@@ -470,7 +470,7 @@ func TestSubscribe(t *testing.T) {
 			}},
 			ReturnCodes: []uint8{0, 1, 2},
 		}, {
-			Name: "Sucessful subscription w/incoming publish",
+			Name: "Successful subscription w/incoming publish",
 
 			Topics: []mqtt.Subscription{{
 				Topic: mqtt.Topic{
