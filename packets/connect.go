@@ -17,14 +17,13 @@ const (
 	cmdDisconnect uint8 = 0xE0
 
 	// Flags
-	ConnectFlagUsername       uint8 = 0x80
-	ConnectFlagPassword       uint8 = 0x40
-	ConnectFlagWillRetain     uint8 = 0x20
-	ConnectFlagWill           uint8 = 0x04
-	ConnectFlagCleanSession   uint8 = 0x02
-	ConnAckFlagMaskv311       uint8 = 0x01
-	ConnAckFlagSessionPresent uint8 = 0x01
-	ConnectMaskWillQoS        uint8 = 0x18
+	connectFlagUsername       uint8 = 0x80
+	connectFlagPassword       uint8 = 0x40
+	connectFlagWillRetain     uint8 = 0x20
+	connectFlagWill           uint8 = 0x04
+	connectFlagCleanSession   uint8 = 0x02
+	connAckFlagSessionPresent uint8 = 0x01
+	connectMaskWillQoS        uint8 = 0x18
 
 	connPropSessionExpire       uint8 = 0x11
 	connPropReceiveMax          uint8 = 0x21
@@ -44,12 +43,12 @@ const (
 	connPropWillUserProps       uint8 = 0x26
 
 	// ConnAck status codes
-	ConnAckAccepted       = 0x00
-	ConnAckBadVersion     = 0x01
-	ConnAckIDNotAllowed   = 0x02
-	ConnAckServerUnavail  = 0x03
-	ConnAckBadCredentials = 0x04
-	ConnAckUnauthorized   = 0x05
+	ConnAckAccepted       uint8 = 0x00
+	ConnAckBadVersion     uint8 = 0x01
+	ConnAckIDNotAllowed   uint8 = 0x02
+	ConnAckServerUnavail  uint8 = 0x03
+	ConnAckBadCredentials uint8 = 0x04
+	ConnAckUnauthorized   uint8 = 0x05
 )
 
 // Connect contains a structural representation of a connect packet. Some of
@@ -134,6 +133,9 @@ type Connect struct {
 	// AuthData holds binary data associated with the specified AuthMethod.
 	// If an AuthMethod is not specified this parameter is ignored.
 	AuthData []byte
+
+	// The following parameters are ignored unless the will topic is set
+	// (i.e. WillTopic.Name != "") and protocol is set to MQTTv5
 
 	// WillDelayInterval requests the server to delay publishing the
 	// WillMessage after the set amount of seconds (defaults to 0).
@@ -226,6 +228,9 @@ func (c *Connect) computeConnectPropLen() uint64 {
 
 func (c *Connect) computeWillPropLen() uint64 {
 	var length uint64
+	if c.WillTopic.Name == "" {
+		return length
+	}
 	if c.WillDelayInterval > 0 {
 		// uint32
 		length += 5
@@ -267,28 +272,28 @@ func (c *Connect) computeFlagsAndLen() (uint8, uint64) {
 	var length uint64 = 10
 	var flags uint8
 	if c.CleanSession {
-		flags |= ConnectFlagCleanSession
+		flags |= connectFlagCleanSession
 	}
 
 	if c.Username != "" {
 		length += uint64(uint16(len(c.Username))) + 2
-		flags |= ConnectFlagUsername
+		flags |= connectFlagUsername
 		if c.Password != "" {
 			length += uint64(uint16(len(c.Password))) + 2
-			flags |= ConnectFlagPassword
+			flags |= connectFlagPassword
 		}
 	} else if c.Version >= mqtt.MQTTv5 {
 		if c.Password != "" {
 			length += uint64(uint16(len(c.Password))) + 2
-			flags |= ConnectFlagPassword
+			flags |= connectFlagPassword
 		}
 	}
 	if c.WillTopic.Name != "" {
 		length += uint64(uint16(len(c.WillTopic.Name)))
 		length += uint64(uint16(len(c.WillMessage))) + 4
-		flags |= (uint8(c.WillTopic.QoS) << 3) | ConnectFlagWill
+		flags |= (uint8(c.WillTopic.QoS) << 3) | connectFlagWill
 		if c.WillRetain {
-			flags |= ConnectFlagWillRetain
+			flags |= connectFlagWillRetain
 		}
 	}
 
@@ -298,6 +303,105 @@ func (c *Connect) computeFlagsAndLen() (uint8, uint64) {
 	}
 	length += uint64(uint16(len(c.ClientID))) + 2
 	return flags, length
+}
+
+func (c *Connect) marshalConnProperties(b []byte) int {
+	var i int
+	if c.SessionExpiryInterval > 0 {
+		b[i] = connPropSessionExpire
+		i++
+		i += util.EncodeValue(b[i:], c.SessionExpiryInterval)
+	}
+	if c.ReceiveMax > 0 {
+		b[i] = connPropReceiveMax
+		i++
+		i += util.EncodeValue(b[i:], c.ReceiveMax)
+	}
+	if c.MaxPacketSize > 0 {
+		b[i] = connPropMaxPacketSize
+		i++
+		i += util.EncodeValue(b[i:], c.MaxPacketSize)
+	}
+	if c.TopicAliasMax > 0 {
+		b[i] = connPropTopicAliasMax
+		i++
+		i += util.EncodeValue(b[i:], c.TopicAliasMax)
+	}
+	if c.RequestResponseInfo {
+		i += copy(b[i:], []byte{
+			connPropRequestResponseInfo, 0x01,
+		})
+	}
+	if c.DisableProblemInfo {
+		i += copy(b[i:], []byte{
+			connPropDisableProblemInfo, 0x00,
+		})
+	}
+	if len(c.ConnUserProperties) > 0 {
+		for key, value := range c.ConnUserProperties {
+			// UTF8-encoded key/value (+ property byte)
+			b[i] = connPropUserProperty
+			i++
+			i += util.EncodeValue(b[i:], key)
+			i += util.EncodeValue(b[i:], value)
+		}
+	}
+	if c.AuthMethod != "" {
+		// UTF-8 string
+		b[i] = connPropAuthMethod
+		i++
+		i += util.EncodeValue(b[i:], c.AuthMethod)
+	}
+	if c.AuthData != nil {
+		// Binary data
+		b[i] = connPropAuthData
+		i++
+		i += util.EncodeValue(b[i:], c.AuthData)
+	}
+	return i
+}
+
+func (c *Connect) marshalWillProperties(b []byte) int {
+	var i int
+	if c.WillDelayInterval > 0 {
+		b[i] = connPropWillDelay
+		i++
+		i += util.EncodeValue(b[i:], c.WillDelayInterval)
+	}
+	if c.WillFormatUTF8 {
+		i += copy(b[i:], []byte{connPropWillUTF8, 0x01})
+	}
+	if c.WillMessageExpiry > 0 {
+		b[i] = connPropWillExpire
+		i++
+		i += util.EncodeValue(b[i:], c.WillMessageExpiry)
+	}
+	if c.WillContentType != "" {
+		b[i] = connPropWillContentType
+		i++
+		i += util.EncodeValue(b[i:], c.WillContentType)
+	}
+	if c.WillResponseTopic != "" {
+		b[i] = connPropWillResponseTopic
+		i++
+		i += util.EncodeValue(b[i:], c.WillResponseTopic)
+		if c.WillCorrelationData != nil {
+			b[i] = connPropWillCorrelationData
+			i++
+			i += util.EncodeValue(
+				b[i:], c.WillCorrelationData,
+			)
+		}
+	}
+	if len(c.WillUserProperties) > 0 {
+		for key, value := range c.WillUserProperties {
+			b[i] = connPropWillUserProps
+			i++
+			i += util.EncodeValue(b[i:], key)
+			i += util.EncodeValue(b[i:], value)
+		}
+	}
+	return i
 }
 
 func (c *Connect) MarshalBinary() (b []byte, err error) {
@@ -313,9 +417,12 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	flags, remLen = c.computeFlagsAndLen()
 	if c.Version >= mqtt.MQTTv5 {
 		connPropLen = c.computeConnectPropLen()
-		willPropLen = c.computeWillPropLen()
 		remLen += connPropLen + uint64(util.GetUvarintLen(connPropLen))
-		remLen += willPropLen + uint64(util.GetUvarintLen(willPropLen))
+		if c.WillTopic.Name != "" {
+			willPropLen = c.computeWillPropLen()
+			remLen += willPropLen +
+				uint64(util.GetUvarintLen(willPropLen))
+		}
 	}
 	remLenSize := util.GetUvarintLen(remLen)
 	if remLenSize > 4 {
@@ -335,105 +442,17 @@ func (c *Connect) MarshalBinary() (b []byte, err error) {
 	i += 2
 	if c.Version >= mqtt.MQTTv5 {
 		i += binary.PutUvarint(b[i:], connPropLen)
-		if c.SessionExpiryInterval > 0 {
-			b[i] = connPropSessionExpire
-			i++
-			i += util.EncodeValue(b[i:], c.SessionExpiryInterval)
-		}
-		if c.ReceiveMax > 0 {
-			b[i] = connPropReceiveMax
-			i++
-			i += util.EncodeValue(b[i:], c.ReceiveMax)
-		}
-		if c.MaxPacketSize > 0 {
-			b[i] = connPropMaxPacketSize
-			i++
-			i += util.EncodeValue(b[i:], c.MaxPacketSize)
-		}
-		if c.TopicAliasMax > 0 {
-			b[i] = connPropTopicAliasMax
-			i++
-			i += util.EncodeValue(b[i:], c.TopicAliasMax)
-		}
-		if c.RequestResponseInfo {
-			i += copy(b[i:], []byte{
-				connPropRequestResponseInfo, 0x01,
-			})
-		}
-		if c.DisableProblemInfo {
-			i += copy(b[i:], []byte{
-				connPropDisableProblemInfo, 0x00,
-			})
-		}
-		if len(c.ConnUserProperties) > 0 {
-			for key, value := range c.ConnUserProperties {
-				// UTF8-encoded key/value (+ property byte)
-				b[i] = connPropUserProperty
-				i++
-				i += util.EncodeValue(b[i:], key)
-				i += util.EncodeValue(b[i:], value)
-			}
-		}
-		if c.AuthMethod != "" {
-			// UTF-8 string
-			b[i] = connPropAuthMethod
-			i += util.EncodeValue(b[i:], c.AuthMethod)
-		}
-		if c.AuthData != nil {
-			// Binary data
-			b[i] = connPropAuthData
-			i++
-			i += util.EncodeValue(b[i:], c.AuthData)
-		}
+		i += c.marshalConnProperties(b[i:])
 	}
 
 	// Payload
 	i += util.EncodeValue(b[i:], c.ClientID)
-
-	if c.Version >= mqtt.MQTTv5 {
-		// Will properties
-		if c.WillDelayInterval > 0 {
-			b[i] = connPropWillDelay
-			i++
-			i += util.EncodeValue(b, c.WillDelayInterval)
-		}
-		if c.WillFormatUTF8 {
-			i += copy(b[i:], []byte{connPropWillUTF8, 0x01})
-		}
-		if c.WillMessageExpiry > 0 {
-			b[i] = connPropWillExpire
-			i++
-			i += util.EncodeValue(b[i:], c.WillMessageExpiry)
-		}
-		if c.WillContentType != "" {
-			b[i] = connPropWillContentType
-			i++
-			i += util.EncodeValue(b[i:], c.WillContentType)
-		}
-		if c.WillResponseTopic != "" {
-			b[i] = connPropWillResponseTopic
-			i++
-			i += util.EncodeValue(b[i:], c.WillResponseTopic)
-			if c.WillCorrelationData != nil {
-				b[i] = connPropWillCorrelationData
-				i++
-				i += util.EncodeValue(
-					b[i:], c.WillCorrelationData,
-				)
-			}
-		}
-		if len(c.WillUserProperties) > 0 {
-			for key, value := range c.WillUserProperties {
-				b[i] = connPropWillUserProps
-				i++
-				i += util.EncodeValue(b[i:], key)
-				i += util.EncodeValue(b[i:], value)
-			}
-		}
-
-	}
-
 	if c.WillTopic.Name != "" {
+		if c.Version >= mqtt.MQTTv5 {
+			// Will properties
+			i += binary.PutUvarint(b[i:], willPropLen)
+			i += c.marshalWillProperties(b[i:])
+		}
 		i += util.EncodeValue(b[i:], c.WillTopic.Name)
 		i += util.EncodeValue(b[i:], c.WillMessage)
 	}
@@ -462,108 +481,282 @@ func (c *Connect) WriteTo(w io.Writer) (n int64, err error) {
 	return n, err
 }
 
-// ReadFrom reads and unmarshals a connect request from the stream.
-// NOTE: it is assumed that the command byte has already been consumed.
-func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
-	var buf [10]byte
+func (c *Connect) readConnProperty(
+	r io.Reader, propID uint8, propLen int,
+) (n int, err error) {
+	var N int
+	switch propID {
+	case connPropSessionExpire:
+		N, err = util.ReadValue(
+			r, &c.SessionExpiryInterval, propLen-n,
+		)
+		n += N
 
-	l, N, err := util.ReadVarint(r)
-	if err != nil {
-		return n, err
-	}
-	length := int(l)
-	n = int64(N)
-	if length <= 12 {
-		return n, mqtt.ErrPacketShort
-	}
+	case connPropReceiveMax:
+		N, err = util.ReadValue(r, &c.ReceiveMax, propLen-n)
+		n += N
 
-	// Read variable header
-	N, err = r.Read(buf[:])
-	n += int64(N)
-	length -= N
-	if err != nil {
-		return n, err
-	}
-	// Parse variable header
-	if !bytes.Equal(buf[2:6], []byte{'M', 'Q', 'T', 'T'}) {
-		return n, fmt.Errorf(
-			"connect: unknown protocol: %s", string(buf[2:6]))
-	}
-	switch mqtt.Version(buf[6]) {
-	case mqtt.MQTTv311:
-		c.Version = mqtt.MQTTv311
+	case connPropMaxPacketSize:
+		N, err = util.ReadValue(r, &c.MaxPacketSize, propLen-n)
+		n += N
+
+	case connPropTopicAliasMax:
+		N, err = util.ReadValue(r, &c.TopicAliasMax, propLen-n)
+		n += N
+
+	case connPropRequestResponseInfo:
+		var requestResponseInfo uint8
+		N, err = util.ReadValue(
+			r, &requestResponseInfo, propLen-n,
+		)
+		n += N
+		if requestResponseInfo == 1 {
+			c.RequestResponseInfo = true
+		}
+
+	case connPropDisableProblemInfo:
+		var requestProblemInfo uint8
+		N, err = util.ReadValue(
+			r, &requestProblemInfo, propLen-n,
+		)
+		n += N
+		if requestProblemInfo == 0 {
+			c.DisableProblemInfo = true
+		}
+
+	case connPropUserProperty:
+		var key, value string
+		N, err = util.ReadValue(r, &key, propLen-n)
+		n += N
+		if err != nil {
+			return n, err
+		}
+		N, err = util.ReadValue(r, &value, propLen-n)
+		n += N
+		if c.ConnUserProperties == nil {
+			c.ConnUserProperties = make(map[string]string)
+		}
+		c.ConnUserProperties[key] = value
+
+	case connPropAuthMethod:
+		N, err = util.ReadValue(r, &c.AuthMethod, propLen-n)
+		n += N
+
+	case connPropAuthData:
+		N, err = util.ReadValue(r, &c.AuthData, propLen-n)
+		n += N
+
 	default:
-		return n, fmt.Errorf(
-			"connect: unknown protocol version: %d", buf[6])
+		err = fmt.Errorf(
+			"protocol error: illegal property ID: %02X",
+			propID,
+		)
 	}
-	flags := uint8(buf[7])
-	if flags&ConnectFlagWillRetain > 0 {
-		if flags&ConnectFlagWill == 0 {
-			return n, fmt.Errorf(
+	return n, err
+}
+
+func (c *Connect) readConnProperties(
+	r io.Reader, propLen int,
+) (n int, err error) {
+	var N int
+	var propID uint8
+	for n < propLen {
+		N, err = util.ReadValue(r, &propID, propLen-n)
+		n += N
+		if err != nil {
+			break
+		}
+
+		N, err = c.readConnProperty(r, propID, propLen-n)
+		n += N
+		if err != nil {
+			break
+		}
+	}
+	return n, err
+}
+
+func (c *Connect) parseVarHeader(
+	r io.Reader, remLen int,
+) (flags uint8, n int, err error) {
+	var buf []byte
+	var b uint8
+	n, err = util.ReadValue(r, &buf, remLen)
+	if err != nil {
+		return flags, n, err
+	} else if !bytes.Equal(buf, []byte{'M', 'Q', 'T', 'T'}) {
+		return flags, n, fmt.Errorf(
+			"connect: unknown protocol: %s", string(buf))
+	}
+	N, err := util.ReadValue(r, &b, remLen-n)
+	n += N
+	if err != nil {
+		return flags, n, err
+	}
+
+	switch mqtt.Version(b) {
+	case mqtt.MQTTv311, mqtt.MQTTv5:
+		c.Version = mqtt.Version(b)
+	default:
+		return flags, n, fmt.Errorf(
+			"connect: unknown protocol version: 0x%02X", b)
+	}
+
+	N, err = util.ReadValue(r, &b, remLen-n)
+	n += N
+	if err != nil {
+		return flags, n, err
+	}
+	flags = b
+	if flags&connectFlagWillRetain > 0 {
+		if flags&connectFlagWill == 0 {
+			return flags, n, fmt.Errorf(
 				"connect: illegal flag composition: 0x%02X",
 				flags,
 			)
 		}
 		c.WillRetain = true
 	}
-	if flags&ConnectFlagCleanSession > 0 {
+	if flags&connectFlagCleanSession > 0 {
 		c.CleanSession = true
 	}
-	c.KeepAlive = binary.BigEndian.Uint16(buf[8:])
+	N, err = util.ReadValue(r, &c.KeepAlive, remLen-n)
+	n += N
+	if err != nil {
+		return flags, n, err
+	}
+	if c.Version >= mqtt.MQTTv5 {
+		var v int
+		v, N, err = util.ReadVarint(r)
+		n += N
+		if err != nil {
+			return flags, n, err
+		} else if remLen < N {
+			return flags, n, mqtt.ErrPacketShort
+		}
+		N, err = c.readConnProperties(r, v)
+		n += N
+	}
+	return flags, n, err
+}
 
-	// Payload
-	c.ClientID, N, err = util.ReadUTF8(r)
-	n += int64(len(c.ClientID) + 2)
+func (c *Connect) readWillProperties(r io.Reader, propLen int) (n int, err error) {
+	for n < propLen {
+		var propID uint8
+		N, err := util.ReadValue(r, &propID, propLen-n)
+		n += N
+		if err != nil {
+			return n, err
+		}
+		switch propID {
+		case connPropWillContentType:
+			N, err = util.ReadValue(
+				r, &c.WillContentType, propLen-n,
+			)
+
+		case connPropWillCorrelationData:
+			N, err = util.ReadValue(
+				r, &c.WillCorrelationData, propLen,
+			)
+
+		case connPropWillDelay:
+			N, err = util.ReadValue(
+				r, &c.WillDelayInterval, propLen-n,
+			)
+
+		case connPropWillExpire:
+			N, err = util.ReadValue(
+				r, &c.WillMessageExpiry, propLen-n,
+			)
+
+		case connPropWillResponseTopic:
+			N, err = util.ReadValue(
+				r, &c.WillResponseTopic, propLen-n,
+			)
+
+		case connPropWillUTF8:
+			var format uint8
+			N, err = util.ReadValue(r, &format, propLen-n)
+			if format == 1 {
+				c.WillFormatUTF8 = true
+			}
+
+		case connPropWillUserProps:
+			var key, value string
+			N, err = util.ReadValue(r, &key, propLen-n)
+			n += N
+			if err != nil {
+				return n, err
+			}
+			N, err = util.ReadValue(r, &value, propLen-n)
+			if c.WillUserProperties == nil {
+				c.WillUserProperties = make(map[string]string)
+			}
+			c.WillUserProperties[key] = value
+
+		default:
+			err = fmt.Errorf(
+				"protocol error: illegal property ID: %02X",
+				propID,
+			)
+		}
+		n += N
+		if err != nil {
+			break
+		}
+	}
+	return n, err
+}
+
+func (c *Connect) readPayload(
+	r io.Reader, remainingLen int, flags uint8,
+) (n int, err error) {
+	var N int
+	n, err = util.ReadValue(r, &c.ClientID, remainingLen)
 	if err != nil {
 		return n, err
-	} else if length -= N; length < 0 {
-		return n, mqtt.ErrPacketShort
 	}
-	if flags&ConnectFlagWill > 0 {
-		c.WillTopic.QoS = mqtt.QoS(flags&ConnectMaskWillQoS) >> 3
-		c.WillTopic.Name, N, err = util.ReadUTF8(r)
-		n += int64(len(c.WillTopic.Name) + 2)
-		if err != nil {
-			return n, err
-		} else if length -= N; length < 0 {
-			return n, mqtt.ErrPacketShort
+	if flags&connectFlagWill > 0 {
+		if c.Version >= mqtt.MQTTv5 {
+			var propLen int
+			propLen, N, err = util.ReadVarint(r)
+			n += N
+			if err != nil {
+				return n, err
+			}
+			N, err = c.readWillProperties(r, propLen)
+			n += N
+			if err != nil {
+				return n, err
+			}
 		}
-		N, err = r.Read(buf[:2])
-		n += int64(N)
+		c.WillTopic.QoS = mqtt.QoS((flags & connectMaskWillQoS) >> 3)
+		N, err := util.ReadValue(r, &c.WillTopic.Name, remainingLen-n)
+		n += N
 		if err != nil {
 			return n, err
-		} else if length -= N; length < 0 {
-			return n, mqtt.ErrPacketShort
 		}
-		l16 := binary.BigEndian.Uint16(buf[:2])
-		c.WillMessage = make([]byte, l16)
-		N, err := r.Read(c.WillMessage)
-		n += int64(N)
+		N, err = util.ReadValue(r, &c.WillMessage, remainingLen-n)
+		n += N
 		if err != nil {
 			return n, err
-		} else if length -= N; length < 0 {
-			return n, mqtt.ErrPacketShort
 		}
 	}
 
-	if flags&ConnectFlagUsername > 0 {
-		c.Username, N, err = util.ReadUTF8(r)
-		n += int64(N)
+	if flags&connectFlagUsername > 0 {
+		N, err = util.ReadValue(r, &c.Username, remainingLen-n)
+		n += N
 		if err != nil {
 			return n, err
-		} else if length -= N; length < 0 {
-			return n, mqtt.ErrPacketShort
 		}
 	}
-	if flags&ConnectFlagPassword > 0 {
-		c.Password, N, err = util.ReadUTF8(r)
-		n += int64(N)
+	if flags&connectFlagPassword > 0 {
+		N, err = util.ReadValue(r, &c.Password, remainingLen-n)
+		n += N
 		if err != nil {
 			return n, err
-		} else if length -= N; length < 0 {
-			return n, mqtt.ErrPacketShort
 		}
-		if (flags&ConnectFlagUsername == 0) &&
+		if (flags&connectFlagUsername == 0) &&
 			(c.Version <= mqtt.MQTTv311) {
 			return n, fmt.Errorf(
 				"protocol violation: password without username",
@@ -571,13 +764,58 @@ func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 	}
 
-	return n, nil
+	return n, err
+}
+
+// ReadFrom reads and unmarshals a connect request from the stream.
+// NOTE: it is assumed that the command byte has already been consumed.
+func (c *Connect) ReadFrom(r io.Reader) (n int64, err error) {
+	var buf [10]byte
+
+	remLength, N, err := util.ReadVarint(r)
+	if err != nil {
+		return n, err
+	}
+	length := int64(remLength + N)
+	n = int64(N)
+	if length <= 12 {
+		return n, mqtt.ErrPacketShort
+	}
+	defer func() {
+		if err == nil {
+			if n > int64(length) {
+				err = mqtt.ErrPacketLong
+				return
+			} else if n < int64(length) {
+				err = mqtt.ErrPacketShort
+			}
+		}
+		for n < int64(length) {
+			N, er := r.Read(buf[:])
+			n += int64(N)
+			if er != nil {
+				break
+			}
+		}
+	}()
+
+	// Read variable header
+	flags, N, err := c.parseVarHeader(r, remLength)
+	n += int64(N)
+	if err != nil {
+		return n, err
+	}
+
+	// Payload
+	N, err = c.readPayload(r, int(length-n), flags)
+	n += int64(N)
+	return n, err
 }
 
 func (c *ConnAck) MarshalBinary() (b []byte, err error) {
 	b = []byte{cmdConnAck, 2, 0, c.ReturnCode}
 	if c.SessionPresent {
-		b[2] |= ConnAckFlagSessionPresent
+		b[2] |= connAckFlagSessionPresent
 	}
 	return b, nil
 }
@@ -604,9 +842,9 @@ func (c *ConnAck) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, mqtt.ErrPacketShort
 	}
 	flags := raw[1]
-	if flags > ConnAckFlagSessionPresent {
+	if flags > connAckFlagSessionPresent {
 		return n, fmt.Errorf("connack: illegal flags: %02X", flags)
-	} else if flags&ConnAckFlagSessionPresent > 0 {
+	} else if flags&connAckFlagSessionPresent > 0 {
 		c.SessionPresent = true
 	}
 	c.ReturnCode = raw[2]

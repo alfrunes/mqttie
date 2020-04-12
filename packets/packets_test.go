@@ -148,7 +148,7 @@ func TestConnect(t *testing.T) {
 	assert.Error(t, err)
 	buf.Reset()
 
-	b[9] &= ^ConnectFlagWill
+	b[9] &= ^connectFlagWill
 	buf.Write(b)
 	_, err = bufIO.Recv()
 	assert.Error(t, err)
